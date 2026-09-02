@@ -32,6 +32,8 @@ switch, and the engine must never require it to exist.
 | Strike Engine | **Implemented** — hard filters then multi-leg ranking on delta fit, liquidity, structure, walls |
 | Position Brain | **Implemented** — thesis validity, P&L, lifecycle transitions, exitability |
 | Analysis pipeline (`brain/pipeline.py`) | **Implemented** — spec §33 flow, MarketState → ranked contracts |
+| Event / Trigger Engine (`events/`) | **Implemented** — 26 of 30 triggers detected; the other 4 are calendar facts with no source |
+| Significance filter | **Implemented** — score floor plus per-trigger cooldown, so the engine stays quiet when the market is |
 | Failure contract (§29) | **Implemented** — explicit domain→action mapping (`risk/failure_policy.py`) |
 | `IntelligenceProvider` / `DeterministicProvider` / agent tools | **Implemented** — the deterministic provider is the always-on default |
 | Risk Engine | **Implemented** — authoritative sizing from four budgets, fail-closed, no override path |
@@ -48,7 +50,7 @@ switch, and the engine must never require it to exist.
 | Database schema | `Base` + UUID/timestamp/version mixin only — the ~27 tables from §27 are not yet modeled |
 | FastAPI app + operations console | **Implemented** — live status/providers/market/analysis endpoints, `docs/console.html` |
 
-803 tests pass; `ruff` and `mypy --strict` are clean.
+875 tests pass; `ruff` and `mypy --strict` are clean.
 
 ### Where the pipeline deliberately stops
 
