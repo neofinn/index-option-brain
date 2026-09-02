@@ -56,6 +56,15 @@ from index_option_brain.contracts.position import (
     PositionLeg,
     PositionState,
 )
+from index_option_brain.contracts.provider import (
+    AuthMethod,
+    Capability,
+    CredentialField,
+    ProviderConnectionState,
+    ProviderDescriptor,
+    ProviderHealth,
+    ProviderKind,
+)
 from index_option_brain.contracts.risk import (
     PortfolioState,
     RiskDecision,
@@ -71,13 +80,16 @@ from index_option_brain.contracts.strike import StrikeCandidate, StrikeLeg
 __all__ = [
     "AccountSnapshot",
     "AnalysisBundle",
+    "AuthMethod",
     "Bar",
     "BarInterval",
     "BreakoutState",
+    "Capability",
     "ConstituentAnalysis",
     "ConstituentQuote",
     "ConstituentSpec",
     "ConstituentState",
+    "CredentialField",
     "Direction",
     "Event",
     "FailureAction",
@@ -109,6 +121,10 @@ __all__ = [
     "PositionEvent",
     "PositionLeg",
     "PositionState",
+    "ProviderConnectionState",
+    "ProviderDescriptor",
+    "ProviderHealth",
+    "ProviderKind",
     "RegimeState",
     "RiskDecision",
     "RiskReasonCode",
