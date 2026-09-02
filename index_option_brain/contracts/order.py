@@ -67,3 +67,14 @@ class OrderRequest(BaseModel):
     sequence: int = 0
     """Submission order within the structure, ascending. Risk-reducing legs
     come first."""
+
+    @property
+    def client_order_id(self) -> str:
+        """A stable id derived from the decision and the leg's position in it.
+
+        This is what makes submission idempotent: re-running a cycle before
+        the first acknowledgement arrives produces the same id, so the Order
+        Manager can recognize the resubmission instead of sending the leg
+        twice and holding double the intended size.
+        """
+        return f"{self.decision_id}:{self.sequence}"

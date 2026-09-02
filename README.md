@@ -40,14 +40,15 @@ switch, and the engine must never require it to exist.
 | Live bar aggregator (`data/bar_aggregator.py`) | **Implemented** — builds bars from snapshots; NSE serves no history |
 | Provider registry (`data/providers.py`) | **Implemented** — 11 providers, 1 with an adapter, the rest labelled |
 | Execution Gate | **Implemented** — 16 blocking checks re-validated against the live market, no override path |
-| Order manager / broker adapter | Interface only (`execution/`) |
+| Order Manager | **Implemented** — §30 state machine, sequenced multi-leg submission, naked-short detection, reconciliation |
+| Broker adapter | Interface only — the one thing between analysis and trading |
 | Feedback / learning engines | Interface only (`feedback/`) |
 | Memory (Postgres repository, Redis cache) | Interface only (`memory/`) |
 | Backtest/replay engine | Interface only (`backtest/`) |
 | Database schema | `Base` + UUID/timestamp/version mixin only — the ~27 tables from §27 are not yet modeled |
 | FastAPI app + operations console | **Implemented** — live status/providers/market/analysis endpoints, `docs/console.html` |
 
-755 tests pass; `ruff` and `mypy --strict` are clean.
+803 tests pass; `ruff` and `mypy --strict` are clean.
 
 ### Where the pipeline deliberately stops
 
@@ -185,6 +186,47 @@ India VIX is deliberately **not** coloured up/down — a falling VIX in green
 beside a falling index in red reads as the two moving opposite ways, so its
 direction is named in words instead.
 
+## The failure the Order Manager exists for
+
+A spread submitted leg by leg can end up with one leg on and one leg
+rejected. If the leg that filled was the short one, the account is holding a
+naked short option — unbounded risk, from a decision that authorized a
+defined-risk spread — and it is invisible until a margin call.
+
+Three things guard against it, in order:
+
+1. The **Execution Gate** sequences the protective leg first, on
+   `OrderRequest.sequence`. Indian brokers also grant spread margin only once
+   the hedge is present, so buying first is both safer and cheaper.
+2. The **Order Manager** re-sorts by sequence rather than trusting the caller
+   (a safety property that depends on the caller is not a guarantee), stops
+   sending the rest of a structure the moment a leg fails, and cancels
+   whatever is still working — cancelling its own orders is unambiguously
+   risk-reducing and needs no further authorization.
+3. If short exposure is filled anyway without its hedge, the submission comes
+   back with `unhedged_short=True`. Exposure is measured against what the
+   **decision intended**, not against what was sent: a protective leg never
+   submitted leaves the position just as naked as one that was rejected, and
+   that is the more common case.
+
+Remediation is a separate, explicit call (`flatten`). A flattening order is
+one the Execution Gate never saw — its checks are all about opening risk, so
+they do not apply to reducing it, but placing a trade the gate never
+authorized is not something that layer should do on its own initiative. The
+condition is reported; the remedy is invoked.
+
+Two more silent failures the same layer covers: `CANCEL_PENDING → FILLED` is
+a **legal** transition, because a cancel loses the race often enough that
+treating it as impossible is how a system comes to believe it is flat while
+holding a position; and submission is keyed on `client_order_id`, because a
+cycle re-running before an acknowledgement arrives would otherwise double the
+position, and afterwards the duplicate is indistinguishable from intent.
+
+Order modification is refused rather than emulated. Cancel-and-replace is not
+a modification: the replacement loses queue position and can be beaten to a
+fill, so a caller believing it modified an order would be wrong about both its
+price and its priority.
+
 ## Repository layout
 
 ```
@@ -296,10 +338,7 @@ heavyweight-driven rallies and assert the brains read them correctly.
    Regime Engine) and an account (which unblocks the Risk Engine). Dhan's
    long-lived token or Angel One's TOTP login suit an unattended process
    better than the daily browser login the OAuth brokers require.
-2. **Order manager** (§17) — the state machine behind the Execution Gate,
-   honouring `OrderRequest.sequence` so the protective leg goes first, and
-   reconciling fills back to the thesis.
-3. **Event/trigger engine** — real detection over consecutive `MarketState`
+2. **Event/trigger engine** — real detection over consecutive `MarketState`
    snapshots, plus the significance filter.
 4. **Postgres schema** for spec §27, then the feedback/learning pipeline.
 5. **Backtest/replay engine** — the brains, the Risk Engine and the Execution
