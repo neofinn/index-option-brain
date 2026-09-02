@@ -22,6 +22,7 @@ from index_option_brain.data.adapters.base import (
     VolatilityDataAdapter,
 )
 from index_option_brain.data.adapters.nse_public import (
+    DEFAULT_INDEX_CONFIG,
     IST,
     NSE_PUBLIC_DESCRIPTOR,
     NseIndexConfig,
@@ -165,9 +166,23 @@ class TestIndexSpec:
         spec = await nse.get_index_spec("NIFTY")
         assert spec.symbol == "NIFTY"
         assert spec.name == "Nifty 50"
-        assert spec.lot_size == 75
+        assert spec.lot_size == 65
         assert spec.strike_step == Decimal(50)
         assert spec.tick_size == Decimal("0.05")
+
+    def test_the_bundled_lot_size_matches_the_exchange_record(self):
+        """A regression pin on a bug that shipped.
+
+        The bundled NIFTY lot size was 75; Dhan's instrument master says 65,
+        on every listed expiry. Everything sized from it — max loss, margin,
+        exposure — was about 15% overstated, and the Execution Gate's
+        LOT_SIZE_VALID check could not catch it, because it compares a leg's
+        lot size against IndexSpec.lot_size and both came from this one
+        constant. Contract specifications belong in
+        `index_config_from_master`; this table is only a fallback, and it must
+        not drift again silently."""
+        assert DEFAULT_INDEX_CONFIG["NIFTY"].lot_size == 65
+        assert DEFAULT_INDEX_CONFIG["BANKNIFTY"].lot_size == 30
 
     async def test_banknifty_has_its_own_strike_step(self, nse: NsePublicAdapter):
         spec = await nse.get_index_spec("BANKNIFTY")
@@ -184,12 +199,12 @@ class TestIndexSpec:
                 "NIFTY": NseIndexConfig(
                     nse_index_name="NIFTY 50",
                     display_name="Nifty 50",
-                    lot_size=50,
+                    lot_size=40,
                     strike_step=Decimal(50),
                 )
             },
         )
-        assert (await adapter.get_index_spec("NIFTY")).lot_size == 50
+        assert (await adapter.get_index_spec("NIFTY")).lot_size == 40
 
     async def test_reading_the_spec_makes_no_request(self, session: RecordedSession):
         """The spec is configuration, so it must not depend on the network
@@ -268,7 +283,7 @@ class TestOptionChain:
         assert leg.contract.expiry == NEAR_EXPIRY
         assert leg.contract.strike == Decimal(23900)
         assert leg.contract.option_type is OptionType.CE
-        assert leg.contract.lot_size == 75
+        assert leg.contract.lot_size == 65
 
     async def test_bid_and_ask_come_from_the_depth_fields(
         self, nse: NsePublicAdapter

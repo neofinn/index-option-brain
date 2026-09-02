@@ -307,13 +307,18 @@ class TestStrikeValidity:
 
 class TestLotSizeValidity:
     def test_a_stale_lot_size_is_blocked(self):
-        """Lot sizes are revised by exchange circular and NSE's public
-        endpoints do not publish them, so a stale one is a live risk. It would
-        otherwise silently mis-size every order built from it."""
+        """Lot sizes are revised by exchange circular, so a stale one
+        silently mis-sizes every order built from it.
+
+        This check catches a leg disagreeing with the index spec. It cannot
+        catch both of them being wrong together, which is exactly what
+        happened when the bundled NIFTY lot size was 75 against an exchange
+        record of 65 — hence contract specifications now coming from Dhan's
+        instrument master rather than a constant."""
         stale = structure(short=contract(SHORT_STRIKE, lot_size=50))
         result = check(trade=decision(contracts=[stale]))
         assert ExecutionCheck.LOT_SIZE_VALID in result.failed_checks
-        assert "lots of 75" in " ".join(result.evidence)
+        assert f"lots of {LOT_SIZE}" in " ".join(result.evidence)
 
 
 class TestQuantityValidity:

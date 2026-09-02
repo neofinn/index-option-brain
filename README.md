@@ -41,6 +41,7 @@ switch, and the engine must never require it to exist.
 | **Live NSE adapter** (`data/adapters/nse_public.py`) | **Implemented** — index, expiries, full chain, India VIX |
 | Live bar aggregator (`data/bar_aggregator.py`) | **Implemented** — builds bars from snapshots; NSE serves no history |
 | Provider registry (`data/providers.py`) | **Implemented** — 11 providers, 1 with an adapter, the rest labelled |
+| Instrument master (`data/dhan_instruments.py`) | **Implemented** — live lot size, tick size, strike step and security ids, no auth needed |
 | Execution Gate | **Implemented** — 16 blocking checks re-validated against the live market, no override path |
 | Order Manager | **Implemented** — §30 state machine, sequenced multi-leg submission, naked-short detection, reconciliation |
 | Broker adapter | Interface only — the one thing between analysis and trading |
@@ -50,7 +51,7 @@ switch, and the engine must never require it to exist.
 | Database schema | `Base` + UUID/timestamp/version mixin only — the ~27 tables from §27 are not yet modeled |
 | FastAPI app + operations console | **Implemented** — live status/providers/market/analysis endpoints, `docs/console.html` |
 
-892 tests pass; `ruff` and `mypy --strict` are clean.
+922 tests pass; `ruff` and `mypy --strict` are clean.
 
 ### Where the pipeline deliberately stops
 
@@ -369,12 +370,38 @@ heavyweight-driven rallies and assert the brains read them correctly.
 6. Optional `AIProvider` behind `IntelligenceProvider`, once there is
    something substantial for it to investigate.
 
+### The lot size was wrong, and how that got found
+
+The system hardcoded NIFTY's lot size as 75 with a comment saying to verify
+it. Dhan publishes an instrument master — 25 MB, no authentication — and it
+says **65**, on every listed expiry from the near weekly out to 2031. Every
+position size, max loss, margin estimate and exposure figure derived from 75
+was about 15% overstated.
+
+The Execution Gate has a `LOT_SIZE_VALID` check for exactly this, and it
+could not catch it: the check compares a leg's `contract.lot_size` against
+`IndexSpec.lot_size`, and both came from the same wrong constant, so they
+agreed with each other and it passed. **A consistency check between two
+copies of a number is not a correctness check.**
+
+So the fix is not 75 → 65. Contract specifications now come from
+`index_config_from_master`, reading the exchange's own record — including the
+lot size *per expiry*, because a revision applies to newly listed contracts
+while existing ones keep the old size until they expire, and a single
+per-underlying answer is wrong during the transition. When several sizes are
+listed and no expiry is given, it raises rather than picking one.
+
+The bundled table remains as an offline fallback, pinned by a test against
+the master so it cannot drift again silently, and `/api/status` reports
+`instrument_source` so an operator can tell a verified table from a fallback.
+
 ### One number worth knowing before funding an account
 
 At the default 1% risk-per-trade, a NIFTY put credit spread with a per-lot max
-loss of about ₹11,835 needs roughly **₹12 lakh** of equity before the Risk
+loss of roughly ₹10,000 needs about **₹10 lakh** of equity before the Risk
 Engine will authorize a single lot. Below that, `BELOW_MINIMUM_SIZE` is the
-correct and permanent answer.
+correct and permanent answer. (That figure moved when the lot size was
+corrected from 75 to 65 — it scales directly with contract size.)
 
 ## Source spec
 

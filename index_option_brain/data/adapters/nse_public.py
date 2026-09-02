@@ -50,7 +50,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from itertools import pairwise
-from typing import Any, Self
+from typing import TYPE_CHECKING, Any, Self
 
 from index_option_brain.analytics.pricing import (
     DEFAULT_RISK_FREE_RATE,
@@ -79,6 +79,9 @@ from index_option_brain.data.adapters.base import (
     VolatilityDataAdapter,
 )
 from index_option_brain.data.http import HttpError, HttpSession, HttpxSession
+
+if TYPE_CHECKING:  # pragma: no cover
+    from index_option_brain.data.dhan_instruments import DhanInstrumentMaster
 
 NSE_BASE = "https://www.nseindia.com"
 _WARMUP_URL = f"{NSE_BASE}/option-chain"
@@ -120,13 +123,24 @@ MAX_PLAUSIBLE_IV_PERCENT = Decimal(300)
 class NseIndexConfig:
     """Contract specifications for one index.
 
-    These are **exchange contract specifications published by circular**, not
-    market observations, and NSE's public endpoints do not expose them: the
-    derivative-quote endpoint that carries `marketLot` returns 404 to this
-    client. They are therefore configuration, and they change — lot sizes have
-    been revised repeatedly. Verify against the current NSE contract
-    specification before trading real size, and override via
-    `NsePublicAdapter(index_config=...)` rather than editing this table.
+    These are exchange contract specifications published by circular, not
+    market observations, and NSE's own public endpoints do not expose them —
+    the derivative-quote endpoint carrying `marketLot` returns 404 to this
+    client.
+
+    **Do not rely on the defaults below.** Build this table from Dhan's public
+    instrument master instead, via `index_config_from_master`: it is
+    authoritative, needs no credentials, and carries the lot size per expiry
+    so a revision in flight is handled correctly.
+
+    The reason for that instruction is a bug these defaults actually had. The
+    NIFTY lot size here was 75, and the exchange's own record says 65 — on
+    every listed expiry. Every position size, max loss, margin estimate and
+    exposure figure derived from it was about 15% overstated, and the
+    Execution Gate's LOT_SIZE_VALID check could not catch it, because it
+    compares a leg's lot size against `IndexSpec.lot_size` and both came from
+    this one wrong constant. A consistency check between two copies of a
+    number is not a correctness check.
     """
 
     nse_index_name: str
@@ -137,14 +151,15 @@ class NseIndexConfig:
     tick_size: Decimal = Decimal("0.05")
 
 
-# Only the two indices the architecture targets are listed. Adding an index
-# whose lot size cannot be verified would put a fabricated contract size into
-# the sizing path, which is worse than not supporting it.
+# A last-resort fallback for running with no network access to the instrument
+# master. The lot sizes here were verified against Dhan's master on
+# 02-Sep-2026; they are a snapshot and they will go stale. Prefer
+# `index_config_from_master`.
 DEFAULT_INDEX_CONFIG: dict[str, NseIndexConfig] = {
     "NIFTY": NseIndexConfig(
         nse_index_name="NIFTY 50",
         display_name="Nifty 50",
-        lot_size=75,
+        lot_size=65,
         strike_step=Decimal(50),
     ),
     "BANKNIFTY": NseIndexConfig(
@@ -154,6 +169,54 @@ DEFAULT_INDEX_CONFIG: dict[str, NseIndexConfig] = {
         strike_step=Decimal(100),
     ),
 }
+
+# The NSE names for the indices this system can be pointed at, so a config
+# built from the instrument master knows what to call them on `/api/allIndices`.
+NSE_INDEX_NAMES: dict[str, tuple[str, str]] = {
+    "NIFTY": ("NIFTY 50", "Nifty 50"),
+    "BANKNIFTY": ("NIFTY BANK", "Nifty Bank"),
+    "FINNIFTY": ("NIFTY FINANCIAL SERVICES", "Nifty Financial Services"),
+    "MIDCPNIFTY": ("NIFTY MIDCAP SELECT", "Nifty Midcap Select"),
+}
+
+
+def index_config_from_master(
+    master: DhanInstrumentMaster,
+    *,
+    symbols: tuple[str, ...] = ("NIFTY", "BANKNIFTY"),
+) -> dict[str, NseIndexConfig]:
+    """Build the contract table from the exchange's own record.
+
+    This is the supported way to configure the adapter. Lot size, tick size
+    and strike step all come from Dhan's public instrument master rather than
+    from a constant, which is what stops a circular revision from silently
+    mis-sizing every order.
+
+    A symbol the master does not list is skipped rather than defaulted: an
+    index whose contract size cannot be verified must not enter the sizing
+    path at all.
+    """
+    config: dict[str, NseIndexConfig] = {}
+    for symbol in symbols:
+        names = NSE_INDEX_NAMES.get(symbol.upper())
+        if names is None:
+            continue
+        try:
+            expiries = master.expiries(symbol)
+            near = expiries[0] if expiries else None
+            lot_size = master.lot_size(symbol, near)
+            tick_size = master.tick_size(symbol)
+        except DataAdapterError:
+            continue
+        step = master.strike_step(symbol, near) if near is not None else None
+        config[symbol.upper()] = NseIndexConfig(
+            nse_index_name=names[0],
+            display_name=names[1],
+            lot_size=lot_size,
+            strike_step=step if step is not None else Decimal(50),
+            tick_size=tick_size,
+        )
+    return config
 
 NSE_PUBLIC_DESCRIPTOR = ProviderDescriptor(
     provider_id="nse_public",

@@ -39,7 +39,7 @@ IST = timezone(timedelta(hours=5, minutes=30), name="IST")
 # Wednesday 02-Sep-2026, 12:00 IST — mid-session, well before the entry cutoff.
 NOW = datetime(2026, 9, 2, 6, 30, tzinfo=UTC)
 EXPIRY = date(2026, 9, 8)
-LOT_SIZE = 75
+LOT_SIZE = 65
 
 SHORT_STRIKE = Decimal(23900)
 LONG_STRIKE = Decimal(23700)

@@ -106,7 +106,11 @@ def create_app(
         # The loop is what makes the engine run continuously rather than only
         # when the console is open — and it is the only thing that
         # accumulates bars, since NSE serves no history.
+        # Contract specifications first: lot size feeds every sizing
+        # calculation, and starting the loop before they are loaded would
+        # accumulate a session of state against a fallback table.
         if run_poller:
+            await live.ensure_ready()
             await market_poller.start()
         try:
             yield
@@ -185,6 +189,7 @@ def create_app(
             "run_mode": str(settings.run_mode),
             "llm_enabled": settings.llm_enabled,
             "kill_switch_engaged": settings.kill_switch_enabled,
+            "instrument_source": live.instrument_source,
             "trading_enabled": False,
             "trading_blocked_reason": (
                 "No broker adapter is implemented, so no order can be placed. "

@@ -36,3 +36,21 @@ right:
 To refresh them, re-request the endpoints listed above and trim to the same
 rows. Do not edit values in place: an edited payload is no longer evidence of
 what the exchange sends.
+
+## `dhan_scrip_master.csv`
+
+A slice of Dhan's public instrument master
+(`https://images.dhan.co/api-data/api-scrip-master.csv`), captured
+02-Sep-2026. The full file is ~25 MB and ~198,000 rows; this keeps the NIFTY,
+BANKNIFTY and FINNIFTY index rows, forty near-expiry (08-Sep) NIFTY options,
+eight far-expiry (29-Sep) ones, eight BANKNIFTY options, and six equity rows
+the parser has to skip.
+
+It needs no authentication, which is what makes it usable before any Dhan
+subscription — and it is the reason the system stopped hardcoding lot sizes.
+The bundled NIFTY lot size was 75; this file says **65**, on every listed
+expiry. Everything sized from it was about 15% overstated.
+
+The far-expiry rows are not padding: they let a test simulate a lot-size
+revision in flight, which is the case where a single per-underlying answer is
+wrong and the size has to be asked for per expiry.

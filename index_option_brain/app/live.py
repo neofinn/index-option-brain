@@ -38,8 +38,10 @@ from index_option_brain.data.adapters.base import DataAdapterError
 from index_option_brain.data.adapters.nse_public import (
     NSE_PUBLIC_DESCRIPTOR,
     NsePublicAdapter,
+    index_config_from_master,
 )
 from index_option_brain.data.bar_aggregator import AggregatingIndexAdapter
+from index_option_brain.data.dhan_instruments import DhanInstrumentMaster
 from index_option_brain.state.market_state_builder import (
     InMemoryIvHistoryStore,
     MarketStateBuilder,
@@ -81,8 +83,63 @@ class LiveEngine:
         default_factory=InMemoryIvHistoryStore
     )
     _health: dict[str, ProviderHealth] = field(default_factory=dict)
+    _master: DhanInstrumentMaster | None = None
 
     # ------------------------------------------------------------ lifecycle
+
+    async def load_instruments(self) -> DhanInstrumentMaster:
+        """Fetch contract specifications from the exchange's own record.
+
+        Called before the adapters are built, so lot size, tick size and
+        strike step are read rather than assumed. Dhan publishes this without
+        authentication, which is what makes it usable before any
+        subscription — and it is the difference between a verified contract
+        size and a constant with a warning comment on it.
+        """
+        if self._master is None:
+            self._master = await DhanInstrumentMaster.load()
+        return self._master
+
+    async def ensure_ready(self) -> None:
+        """Load contract specifications, then build the adapters around them.
+
+        A failure here is not fatal: the adapters fall back to the snapshot in
+        DEFAULT_INDEX_CONFIG, and `instrument_source` reports which was used
+        so the console can say so. Refusing to start would make a transient
+        CDN outage an availability outage.
+        """
+        try:
+            master = await self.load_instruments()
+        except DataAdapterError:
+            self._ensure()
+            return
+        config = index_config_from_master(master)
+        if config:
+            self._nse = NsePublicAdapter(index_config=config)
+            self._index = AggregatingIndexAdapter(
+                self._nse, intervals=(self.intraday_interval, BarInterval.DAY)
+            )
+            self._builder = MarketStateBuilder(
+                self._index,
+                None,
+                self._nse,
+                self._nse,
+                self._iv_history,
+                intraday_interval=self.intraday_interval,
+            )
+        else:
+            self._ensure()
+
+    @property
+    def instrument_source(self) -> str:
+        """Where the contract specifications in use came from.
+
+        Surfaced because a stale lot size mis-sizes every order, and an
+        operator needs to be able to tell a verified table from a fallback.
+        """
+        if self._master is not None:
+            return "dhan_instrument_master"
+        return "bundled_snapshot"
 
     def _ensure(self) -> tuple[NsePublicAdapter, AggregatingIndexAdapter, MarketStateBuilder]:
         if self._nse is None or self._index is None or self._builder is None:
