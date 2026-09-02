@@ -51,12 +51,14 @@ class TestStageWiring:
 
 
 class TestAuthorizationBoundary:
-    def test_the_pipeline_produces_no_trade_decision(self, uptrend_state: MarketState):
-        """Risk authorization and the execution gate are not implemented, so
-        nothing here may present itself as authorized."""
+    def test_analysis_alone_never_authorizes(self, uptrend_state: MarketState):
+        """Called without an account and portfolio the Risk Engine cannot run,
+        so the cycle must stop at analysis. Nothing may present itself as
+        authorized on the strength of a good signal alone (spec §14)."""
         result = brain.run(uptrend_state)
-        assert not hasattr(result, "trade_decision")
-        assert not hasattr(result, "risk_decision")
+        assert result.risk_decision is None
+        assert result.decision is None
+        assert result.is_authorized is False
 
     def test_actionable_means_survived_analysis_not_authorized(
         self, uptrend_state: MarketState

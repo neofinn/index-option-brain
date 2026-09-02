@@ -2,7 +2,7 @@ from decimal import Decimal
 
 from index_option_brain.contracts.decision import TradeDecision
 from index_option_brain.contracts.enums import Direction, StrategyType, TradeDecisionType
-from index_option_brain.contracts.risk import RiskDecision
+from index_option_brain.contracts.risk import RiskDecision, RiskReasonCode
 
 
 def test_no_trade_is_representable_without_a_risk_approval():
@@ -20,7 +20,7 @@ def test_no_trade_is_representable_without_a_risk_approval():
         max_loss=Decimal(0),
         risk_decision=RiskDecision(
             approved=False,
-            reason_codes=["daily_loss_limit_reached"],
+            reason_codes=[RiskReasonCode.DAILY_LOSS_LIMIT_REACHED],
             max_loss=Decimal(0),
             quantity=0,
             exposure=Decimal(0),

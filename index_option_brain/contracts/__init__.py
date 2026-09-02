@@ -56,7 +56,13 @@ from index_option_brain.contracts.position import (
     PositionLeg,
     PositionState,
 )
-from index_option_brain.contracts.risk import RiskDecision
+from index_option_brain.contracts.risk import (
+    PortfolioState,
+    RiskDecision,
+    RiskReasonCode,
+    ScheduledEvent,
+    TradeCandidate,
+)
 from index_option_brain.contracts.scenario import Scenario
 from index_option_brain.contracts.signal import Signal
 from index_option_brain.contracts.strategy import StrategyCandidate
@@ -98,20 +104,24 @@ __all__ = [
     "OrderLifecycleState",
     "OrderRequest",
     "OrderSide",
+    "PortfolioState",
     "Position",
     "PositionEvent",
     "PositionLeg",
     "PositionState",
     "RegimeState",
     "RiskDecision",
+    "RiskReasonCode",
     "Scenario",
     "ScenarioKind",
+    "ScheduledEvent",
     "SectorState",
     "Signal",
     "StrategyCandidate",
     "StrategyType",
     "StrikeCandidate",
     "StrikeLeg",
+    "TradeCandidate",
     "TradeDecision",
     "TradeDecisionType",
     "TradeFeedback",
