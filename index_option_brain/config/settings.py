@@ -37,6 +37,13 @@ class Settings(BaseSettings):
 
     kill_switch_enabled: bool = Field(default=False, alias="KILL_SWITCH_ENABLED")
 
+    bar_store_dir: str = Field(default="var/bars", alias="BAR_STORE_DIR")
+    """Where observed bars are snapshotted so a restart does not lose them.
+
+    They are expensive: NSE serves no history, so a week of 5-minute bars is
+    a week of uptime. Empty disables persistence.
+    """
+
 
 @lru_cache
 def get_settings() -> Settings:

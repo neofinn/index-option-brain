@@ -41,6 +41,7 @@ switch, and the engine must never require it to exist.
 | Black-Scholes pricing / greeks (`analytics/`) | **Implemented** — production, because no Indian feed publishes greeks |
 | **Live NSE adapter** (`data/adapters/nse_public.py`) | **Implemented** — index, expiries, full chain, India VIX |
 | Live bar aggregator (`data/bar_aggregator.py`) | **Implemented** — builds bars from snapshots; NSE serves no history |
+| Bar persistence (`data/bar_store.py`) | **Implemented** — atomic snapshots, so a restart does not lose the session |
 | Provider registry (`data/providers.py`) | **Implemented** — 11 providers, 1 with an adapter, the rest labelled |
 | Instrument master (`data/dhan_instruments.py`) | **Implemented** — live lot size, tick size, strike step and security ids, no auth needed |
 | Execution Gate | **Implemented** — 16 blocking checks re-validated against the live market, no override path |
@@ -52,7 +53,7 @@ switch, and the engine must never require it to exist.
 | Database schema | `Base` + UUID/timestamp/version mixin only — the ~27 tables from §27 are not yet modeled |
 | FastAPI app + operations console | **Implemented** — live status/providers/market/analysis endpoints, `docs/console.html` |
 
-1,010 tests pass; `ruff` and `mypy --strict` are clean.
+1,029 tests pass; `ruff` and `mypy --strict` are clean.
 
 ### Where the pipeline deliberately stops
 

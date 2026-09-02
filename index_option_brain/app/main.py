@@ -30,6 +30,7 @@ from index_option_brain.app.live import FeedUnavailable, LiveEngine, session_lab
 from index_option_brain.app.runner import MarketPoller, PollerConfig
 from index_option_brain.config.settings import get_settings
 from index_option_brain.contracts.provider import Capability, ProviderDescriptor
+from index_option_brain.data.bar_store import BarStore
 from index_option_brain.data.providers import (
     ALL_PROVIDERS,
     REQUIRED_FOR_ANALYSIS,
@@ -100,7 +101,9 @@ def create_app(
     suite is a test that fails when the market is shut.
     """
     settings = get_settings()
-    live = engine or LiveEngine()
+    live = engine or LiveEngine(
+        bar_store=BarStore(settings.bar_store_dir) if settings.bar_store_dir else None
+    )
     market_poller = poller or MarketPoller(
         live, symbols=("NIFTY", "BANKNIFTY"), config=PollerConfig()
     )

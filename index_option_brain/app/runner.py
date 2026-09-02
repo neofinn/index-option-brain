@@ -62,6 +62,13 @@ class PollerConfig:
     backoff_multiplier: float = 2.0
     history_size: int = 200
     """How many recent events and cycles to keep for the console."""
+    persist_every_cycles: int = 20
+    """Snapshot observed bars this often.
+
+    Not only on shutdown, because a crash is not a shutdown: periodic
+    snapshots mean a kill -9 costs the bars since the last one rather than
+    the whole session.
+    """
     analyse_on_every_cycle: bool = False
     """Run the brain whether or not anything significant fired.
 
@@ -243,6 +250,16 @@ class MarketPoller:
             self.stats.analyses_run += 1
 
         self._previous[symbol] = state
+        if (
+            self.config.persist_every_cycles > 0
+            and self.stats.successful_cycles % self.config.persist_every_cycles == 0
+        ):
+            try:
+                self.engine.persist_bars()
+            except OSError as exc:
+                # Persistence failing must not stop the loop; losing bars is
+                # worse than losing them slightly less often.
+                self.stats.last_error = f"bar snapshot failed: {exc}"
         return state
 
     # -------------------------------------------------------------- reading

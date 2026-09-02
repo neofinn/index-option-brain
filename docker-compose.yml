@@ -59,6 +59,10 @@ services:
     read_only: true
     tmpfs:
       - /tmp
+    volumes:
+      # Observed bars, so a restart does not go blind for a session. The root
+      # filesystem is read-only, so this is the one writable path.
+      - ./var:/app/var
     security_opt:
       - no-new-privileges:true
     logging:

@@ -97,12 +97,31 @@ A useful expectation once it is up: `analyses_run` should be far *lower* than
 something changed, not on a timer. Measured on a closed market: six cycles,
 one significant event, one analysis.
 
-## Restarts cost bars
+## Bars survive restarts
 
-A restart loses the intraday bars observed since the last start. Nothing is
-persisted yet — the Postgres schema (spec §27) is still to be built. Until it
-is, restart during a session only when you have to, and prefer
-`docker compose up -d --build` at the weekend.
+Observed bars are snapshotted to `BAR_STORE_DIR` (default `var/bars`), one
+file per symbol and interval, written atomically. They are reloaded on start,
+so a deploy no longer costs a session of history — which matters because NSE
+serves no history and a week of 5-minute bars is a week of uptime.
+
+Snapshots happen every 20 successful cycles as well as on a clean shutdown,
+because a crash is not a shutdown: periodic writes mean a `kill -9` costs the
+bars since the last snapshot rather than the whole session.
+
+A snapshot that cannot be read cleanly is discarded rather than partially
+loaded, and the aggregator starts cold. That is deliberate: starting cold
+costs a session, while a series seeded from a truncated file is a wrong
+series that no downstream indicator can detect.
+
+Mount it. In Docker the container root is read-only, so add a volume for it:
+
+```yaml
+    volumes:
+      - ./var:/app/var
+```
+
+The full §27 Postgres schema is still to be built; this covers the specific
+thing that hurt.
 
 ## Updating
 

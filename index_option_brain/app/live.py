@@ -41,6 +41,7 @@ from index_option_brain.data.adapters.nse_public import (
     index_config_from_master,
 )
 from index_option_brain.data.bar_aggregator import AggregatingIndexAdapter
+from index_option_brain.data.bar_store import BarStore
 from index_option_brain.data.dhan_instruments import DhanInstrumentMaster
 from index_option_brain.state.market_state_builder import (
     InMemoryIvHistoryStore,
@@ -74,6 +75,8 @@ class LiveEngine:
 
     cache_seconds: float = 5.0
     intraday_interval: BarInterval = BarInterval.MINUTE_5
+    bar_store: BarStore | None = None
+    """Makes observed bars survive a restart. None keeps them in memory only."""
     _cache: dict[str, _Cached] = field(default_factory=dict)
     _nse: NsePublicAdapter | None = None
     _index: AggregatingIndexAdapter | None = None
@@ -117,7 +120,9 @@ class LiveEngine:
         if config:
             self._nse = NsePublicAdapter(index_config=config)
             self._index = AggregatingIndexAdapter(
-                self._nse, intervals=(self.intraday_interval, BarInterval.DAY)
+                self._nse,
+                intervals=(self.intraday_interval, BarInterval.DAY),
+                store=self.bar_store,
             )
             self._builder = MarketStateBuilder(
                 self._index,
@@ -145,7 +150,9 @@ class LiveEngine:
         if self._nse is None or self._index is None or self._builder is None:
             self._nse = NsePublicAdapter()
             self._index = AggregatingIndexAdapter(
-                self._nse, intervals=(self.intraday_interval, BarInterval.DAY)
+                self._nse,
+                intervals=(self.intraday_interval, BarInterval.DAY),
+                store=self.bar_store,
             )
             self._builder = MarketStateBuilder(
                 self._index,
@@ -159,7 +166,20 @@ class LiveEngine:
             )
         return self._nse, self._index, self._builder
 
+    def persist_bars(self) -> int:
+        """Snapshot observed bars. Returns the number of series written."""
+        if self._index is None:
+            return 0
+        return self._index.persist()
+
     async def aclose(self) -> None:
+        # Snapshot before tearing down, so a clean shutdown keeps the session's
+        # bars rather than discarding them.
+        try:
+            self.persist_bars()
+        except OSError:
+            # A failure to persist must not prevent a clean shutdown.
+            pass
         if self._nse is not None:
             await self._nse.aclose()
         self._nse = None

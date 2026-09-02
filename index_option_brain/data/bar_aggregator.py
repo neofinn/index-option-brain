@@ -46,6 +46,7 @@ from decimal import Decimal
 from index_option_brain.contracts.enums import BarInterval
 from index_option_brain.contracts.instruments import Bar, IndexQuote, IndexSpec
 from index_option_brain.data.adapters.base import DataAdapterError, IndexDataAdapter
+from index_option_brain.data.bar_store import BarStore
 
 IST = timezone(timedelta(hours=5, minutes=30), name="IST")
 
@@ -426,11 +427,18 @@ class AggregatingIndexAdapter(IndexDataAdapter):
         *,
         intervals: tuple[BarInterval, ...] = (BarInterval.MINUTE_5, BarInterval.DAY),
         max_bars: int = 500,
+        store: BarStore | None = None,
     ) -> None:
+        """
+        `store`, when given, makes observed bars survive a restart. They are
+        expensive — a week of 5-minute bars is a week of uptime — and without
+        it every deploy is a decision to go blind for a session.
+        """
         self._source = source
         self._aggregators: dict[str, dict[BarInterval, LiveBarAggregator]] = {}
         self._intervals = intervals
         self._max_bars = max_bars
+        self._store = store
 
     def aggregator(self, symbol: str, interval: BarInterval) -> LiveBarAggregator:
         symbol = symbol.upper()
@@ -441,9 +449,14 @@ class AggregatingIndexAdapter(IndexDataAdapter):
             )
         per_symbol = self._aggregators.setdefault(symbol, {})
         if interval not in per_symbol:
-            per_symbol[interval] = LiveBarAggregator(
-                interval, max_bars=self._max_bars
-            )
+            aggregator = LiveBarAggregator(interval, max_bars=self._max_bars)
+            if self._store is not None:
+                # Seeded, not replayed: the snapshot is trusted as given, and
+                # an unreadable one seeds nothing rather than something.
+                restored = self._store.load(symbol, interval)
+                if restored:
+                    aggregator.seed(restored)
+            per_symbol[interval] = aggregator
         return per_symbol[interval]
 
     def seed(self, symbol: str, interval: BarInterval, bars: list[Bar]) -> None:
@@ -461,6 +474,26 @@ class AggregatingIndexAdapter(IndexDataAdapter):
         for interval in self._intervals:
             self.aggregator(symbol, interval).observe(quote)
         return quote
+
+    def persist(self, symbol: str | None = None) -> int:
+        """Write every tracked series to the store. Returns files written.
+
+        Called on a clean shutdown and periodically, because a crash between
+        snapshots costs only the bars since the last one — where losing the
+        whole series costs a session.
+        """
+        if self._store is None:
+            return 0
+        written = 0
+        symbols = [symbol.upper()] if symbol else list(self._aggregators)
+        for name in symbols:
+            for interval, aggregator in self._aggregators.get(name, {}).items():
+                bars = aggregator.completed
+                if not bars:
+                    continue
+                self._store.save(name, interval, bars)
+                written += 1
+        return written
 
     async def get_index_bars(
         self, symbol: str, interval: BarInterval, count: int
