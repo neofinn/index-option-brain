@@ -37,6 +37,7 @@ switch, and the engine must never require it to exist.
 | Failure contract (§29) | **Implemented** — explicit domain→action mapping (`risk/failure_policy.py`) |
 | `IntelligenceProvider` / `DeterministicProvider` / agent tools | **Implemented** — the deterministic provider is the always-on default |
 | Risk Engine | **Implemented** — authoritative sizing from four budgets, fail-closed, no override path |
+| Transaction cost model (`analytics/costs.py`) | **Implemented** — brokerage, STT, exchange, SEBI, stamp, GST; ranking is net of costs |
 | Black-Scholes pricing / greeks (`analytics/`) | **Implemented** — production, because no Indian feed publishes greeks |
 | **Live NSE adapter** (`data/adapters/nse_public.py`) | **Implemented** — index, expiries, full chain, India VIX |
 | Live bar aggregator (`data/bar_aggregator.py`) | **Implemented** — builds bars from snapshots; NSE serves no history |
@@ -51,7 +52,7 @@ switch, and the engine must never require it to exist.
 | Database schema | `Base` + UUID/timestamp/version mixin only — the ~27 tables from §27 are not yet modeled |
 | FastAPI app + operations console | **Implemented** — live status/providers/market/analysis endpoints, `docs/console.html` |
 
-994 tests pass; `ruff` and `mypy --strict` are clean.
+1,010 tests pass; `ruff` and `mypy --strict` are clean.
 
 ### Where the pipeline deliberately stops
 
@@ -420,6 +421,37 @@ on the risk-free rate and day-count convention used to derive them, and Dhan
 publishes neither — so mixing its numbers with NSE-derived ones would put two
 conventions into one delta-fit ranking, comparing quantities that are not the
 same quantity. `trust_broker_greeks=True` overrides that deliberately.
+
+### Costs are not a rounding error
+
+Measured against the live NIFTY chain at 6 days to expiry, 65-lot, pricing
+each leg pessimistically (sell the bid, buy the ask):
+
+| Put spread (spot 23,914) | Credit | Max loss | Gross R:R | Round trip | Cost as % of profit | Breakeven win rate |
+| --- | --- | --- | --- | --- | --- | --- |
+| 23800/23600 | ₹2,896 | ₹10,104 | 0.287 | ₹107 | 3.7% | 78.5% |
+| 23700/23500 | ₹1,817 | ₹11,183 | 0.162 | ₹103 | 5.6% | 86.8% |
+| 23600/23400 | ₹1,082 | ₹11,918 | 0.091 | ₹100 | 9.2% | 92.4% |
+| 23500/23300 | ₹656 | ₹12,344 | 0.053 | ₹98 | **14.9%** | **95.7%** |
+
+Two things follow.
+
+**Brokerage is a flat fee per order**, so it does not shrink with the
+premium. Ranking structures on gross reward-to-risk therefore systematically
+favours exactly the strikes where costs take the largest share of the edge.
+Both the Strategy and Strike engines now rank on `net_reward_to_risk`, and
+`max_loss` includes costs because they are paid on the losing trade too. The
+gross figures stay available for display and for reconciling against a
+broker's own numbers.
+
+**At current volatility this strategy is not worth trading.** With India VIX
+at 11.34 and ATM IV near 10%, a 1-sigma-OTM put spread pays 0.09 reward for 1
+of risk and needs a 92% win rate to break even after costs. That is not a
+flaw in the architecture — it is the architecture measuring an environment
+with no premium in it. The system's own `iv_score` (implied versus realized)
+is the field that expresses this, and it is the mechanism that should steer
+away from credit structures once bars exist to compute realized volatility
+from.
 
 ### "Expected move" is two different numbers
 

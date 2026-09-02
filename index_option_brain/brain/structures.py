@@ -21,6 +21,10 @@ from dataclasses import dataclass
 from decimal import Decimal
 from itertools import pairwise
 
+from index_option_brain.analytics.costs import (
+    DEFAULT_COST_MODEL,
+    IndianOptionCostModel,
+)
 from index_option_brain.contracts.enums import OptionType, OrderSide, StrategyType
 from index_option_brain.contracts.instruments import OptionQuote
 from index_option_brain.contracts.market_state import MarketState
@@ -233,6 +237,7 @@ def build_structure(
     width_steps: int = 2,
     lots: int = 1,
     max_relative_spread: float = 0.08,
+    cost_model: IndianOptionCostModel | None = None,
 ) -> StrikeCandidate | None:
     """Build one executable structure, or None if the chain can't support it.
 
@@ -318,6 +323,20 @@ def build_structure(
     # is re-checked by the Risk Engine before anything is authorized.
     capital_required = max_loss if net_premium < 0 else net_premium
 
+    # Costs are computed from the legs as priced, at this size. Charges fall
+    # on premium turnover, not on the notional of the underlying — using
+    # notional would overstate them by two orders of magnitude.
+    model = cost_model or DEFAULT_COST_MODEL
+    round_trip_cost = model.round_trip(
+        [
+            (
+                leg.reference_price * leg.contract.lot_size * leg.lots,
+                leg.side,
+            )
+            for leg in legs
+        ]
+    )
+
     return StrikeCandidate(
         strategy=strategy,
         legs=legs,
@@ -331,4 +350,5 @@ def build_structure(
         max_profit=max_profit,
         breakeven=breakevens,
         rationale="",
+        round_trip_cost=round_trip_cost,
     )

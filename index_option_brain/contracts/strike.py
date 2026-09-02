@@ -44,6 +44,19 @@ class StrikeCandidate(BaseModel):
     max_profit: Decimal | None
     breakeven: list[Decimal] = Field(default_factory=list)
     rationale: str = ""
+    round_trip_cost: Decimal = Decimal(0)
+    """Brokerage, STT, exchange, SEBI, stamp and GST to open *and* close this
+    structure at this size.
+
+    Held separately from `max_profit` rather than folded into it, because an
+    operator needs to see the decomposition — but every ranking decision uses
+    the net figures below. Measured on the live NIFTY chain, this runs about
+    ₹100 on a two-leg spread, which is 3.7% of max profit on a near-the-money
+    spread and **14.9%** on one sold four strikes further out. Brokerage is a
+    flat fee per order, so it does not shrink with the premium: ranking on
+    gross reward-to-risk systematically favours exactly the strikes where
+    costs do the most damage.
+    """
 
     @property
     def is_credit(self) -> bool:
@@ -51,6 +64,43 @@ class StrikeCandidate(BaseModel):
 
     @property
     def reward_to_risk(self) -> float | None:
+        """Gross, before costs. Kept for display and for comparison with a
+        broker's own figures; `net_reward_to_risk` is what gets ranked."""
         if self.max_profit is None or self.max_loss <= 0:
             return None
         return float(self.max_profit / self.max_loss)
+
+    @property
+    def net_max_profit(self) -> Decimal | None:
+        """Max profit after costs. None when profit is unbounded."""
+        if self.max_profit is None:
+            return None
+        return self.max_profit - self.round_trip_cost
+
+    @property
+    def net_max_loss(self) -> Decimal:
+        """Max loss including costs.
+
+        Costs are certain and they are paid on the losing trade too, so the
+        real worst case is larger than the market's. The Risk Engine sizes
+        against this."""
+        return self.max_loss + self.round_trip_cost
+
+    @property
+    def net_reward_to_risk(self) -> float | None:
+        """What the Strategy and Strike engines rank on.
+
+        On the live chain this is the difference between a spread that looks
+        acceptable gross and one that needs a 96% win rate to break even."""
+        profit = self.net_max_profit
+        if profit is None or self.net_max_loss <= 0:
+            return None
+        return float(profit / self.net_max_loss)
+
+    @property
+    def cost_share_of_profit(self) -> float | None:
+        """Costs as a fraction of gross max profit — the number that shows
+        when a structure is being eaten by its own execution."""
+        if self.max_profit is None or self.max_profit <= 0:
+            return None
+        return float(self.round_trip_cost / self.max_profit)

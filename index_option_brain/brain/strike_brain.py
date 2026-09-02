@@ -196,7 +196,7 @@ class DeterministicStrikeEngine(StrikeEngine):
         notes: list[str] = []
         components: list[tuple[float | None, float]] = []
 
-        reward = candidate.reward_to_risk
+        reward = candidate.net_reward_to_risk
         if reward is not None:
             components.append((ind.clamp(reward / 1.5, 0.0, 1.0), 0.5))
         else:

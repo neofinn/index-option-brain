@@ -275,7 +275,10 @@ class DeterministicStrategyEngine(StrategyEngine):
         else:
             theta_fit = ind.clamp(days / 10.0, 0.2, 1.0)
 
-        reward = structure.reward_to_risk
+        # Net of costs, deliberately. Gross reward-to-risk favours far-OTM
+        # spreads precisely where flat-fee brokerage takes the largest
+        # share of the credit.
+        reward = structure.net_reward_to_risk
         if reward is None:
             # Long premium: judge by how far the breakeven sits inside one
             # sigma, since an unreachable breakeven is not "unlimited upside".
