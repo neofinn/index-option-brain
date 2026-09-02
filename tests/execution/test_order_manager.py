@@ -79,7 +79,9 @@ class StubBroker(BrokerAdapter):
             updated_at=NOW,
         )
 
-    async def cancel_order(self, broker_order_id: str) -> Order:
+    async def cancel_order(
+        self, broker_order_id: str, *, known: Order | None = None
+    ) -> Order:
         self.cancelled.append(broker_order_id)
         if self.cancel_error is not None:
             raise self.cancel_error
@@ -99,7 +101,9 @@ class StubBroker(BrokerAdapter):
             updated_at=NOW,
         )
 
-    async def get_order_status(self, broker_order_id: str) -> Order:
+    async def get_order_status(
+        self, broker_order_id: str, *, known: Order | None = None
+    ) -> Order:
         self.status_calls.append(broker_order_id)
         if broker_order_id in self.status:
             return self.status[broker_order_id]

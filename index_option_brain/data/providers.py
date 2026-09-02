@@ -7,10 +7,18 @@ adapter instead of appearing in a list that implies it works.
 
 On the accuracy of what is claimed here
 ---------------------------------------
-Exactly one entry has `implemented=True` — NSE's public API — and every
-capability on it was probed against the live endpoint. Its four capabilities
-are the ones that answered; bars, breadth, greeks, account and orders are
-absent because they were tried and did not work.
+Two entries have `implemented=True`.
+
+**NSE public** was probed end to end without credentials: its four
+capabilities are the ones that answered, and bars, breadth, greeks, account
+and orders are absent because they were tried and did not work.
+
+**Dhan** has an adapter whose routes and error envelopes were verified
+against both hosts, but whose response *bodies* were not — those need a
+token. Its capability list therefore still carries a claim, and its notes say
+so. `scripts/dhan_probe.py` converts the claim into a fact; until it has been
+run, `ProviderHealth.verified_capabilities` is the field to trust, not the
+descriptor's.
 
 Every other entry is a **roadmap entry**. Its capability list is read off the
 provider's published API documentation and has not been verified against an
@@ -33,6 +41,7 @@ from index_option_brain.contracts.provider import (
     ProviderDescriptor,
     ProviderKind,
 )
+from index_option_brain.data.adapters.dhan import DHAN_DESCRIPTOR
 from index_option_brain.data.adapters.nse_public import NSE_PUBLIC_DESCRIPTOR
 
 _UNVERIFIED = (
@@ -147,27 +156,9 @@ ANGEL_ONE = _broker(
     ),
 )
 
-DHAN = _broker(
-    "dhan",
-    "Dhan",
-    auth=AuthMethod.API_KEY_SECRET,
-    credentials=(
-        _CLIENT_ID,
-        CredentialField(
-            name="access_token",
-            label="Access token",
-            help="Generated in the Dhan web console; longer-lived than a daily OAuth token.",
-        ),
-    ),
-    docs_url="https://dhanhq.co/docs/v2/",
-    extra=frozenset({Capability.MARGIN_CALCULATOR}),
-    notes=(
-        (
-            "A long-lived token avoids the daily browser login the OAuth "
-            "brokers require, which suits an unattended process."
-        ),
-    ),
-)
+# Dhan is the one broker with an adapter. Imported rather than described here,
+# so the registry cannot drift from what the adapter actually claims.
+DHAN = DHAN_DESCRIPTOR
 
 FYERS = _broker(
     "fyers",
@@ -249,20 +240,35 @@ def get_provider(provider_id: str) -> ProviderDescriptor:
 
 
 def implemented_providers() -> tuple[ProviderDescriptor, ...]:
-    """Providers with a working adapter — the only ones that can be connected."""
+    """Providers with an adapter — the only ones that can be connected."""
     return tuple(p for p in ALL_PROVIDERS if p.implemented)
 
 
-def providers_serving(*capabilities: Capability) -> tuple[ProviderDescriptor, ...]:
-    """Implemented providers covering all of `capabilities`.
+def verified_providers() -> tuple[ProviderDescriptor, ...]:
+    """Providers whose field mapping was proven against real responses.
 
-    Restricted to implemented providers on purpose: the question this answers
-    is "who can serve me bars right now", and a documented capability with no
-    adapter behind it is not an answer to that.
+    The stricter question, and the one to ask before relying on a number. An
+    adapter can exist and still be wrong about which field holds the bid.
     """
-    return tuple(
-        p for p in implemented_providers() if p.supports(*capabilities)
-    )
+    return tuple(p for p in ALL_PROVIDERS if p.implemented and p.verified)
+
+
+def providers_serving(
+    *capabilities: Capability, verified_only: bool = False
+) -> tuple[ProviderDescriptor, ...]:
+    """Providers with an adapter covering all of `capabilities`.
+
+    Roadmap entries are excluded on purpose: the question this answers is
+    "who can serve me bars right now", and a documented capability with no
+    adapter behind it is not an answer to that.
+
+    `verified_only` narrows further, to providers whose mapping was proven
+    against real responses. Use it when a wrong answer costs money — sizing,
+    for instance — and the plain form when the question is which adapter to
+    attempt.
+    """
+    pool = verified_providers() if verified_only else implemented_providers()
+    return tuple(p for p in pool if p.supports(*capabilities))
 
 
 def missing_capabilities(

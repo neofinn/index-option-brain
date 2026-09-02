@@ -384,7 +384,9 @@ class DeterministicOrderManager(OrderManager):
                 detail={"reason": "no broker order id; order never left the system"},
             )
         try:
-            result = await self._broker.cancel_order(order.broker_order_id)
+            result = await self._broker.cancel_order(
+                order.broker_order_id, known=order
+            )
         except Exception as exc:  # noqa: BLE001
             return self._apply(
                 pending,
@@ -421,7 +423,9 @@ class DeterministicOrderManager(OrderManager):
         if not order.broker_order_id:
             return order
         try:
-            remote = await self._broker.get_order_status(order.broker_order_id)
+            remote = await self._broker.get_order_status(
+                order.broker_order_id, known=order
+            )
         except Exception as exc:  # noqa: BLE001
             self._log(
                 order,

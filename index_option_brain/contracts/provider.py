@@ -151,6 +151,21 @@ class ProviderDescriptor(BaseModel):
     False means the descriptor is a roadmap entry. The console must render it
     as unavailable and must not offer a connect action for it.
     """
+    verified: bool = False
+    """Whether the adapter's field mapping was checked against real responses.
+
+    Distinct from `implemented`, and the distinction is not pedantry. An
+    adapter can exist, compile, and be entirely wrong about which field holds
+    the bid — NSE documents `bidprice` and always sends null, putting the real
+    top of book in `buyPrice1`, so an adapter written from the documentation
+    alone would produce a chain with no bid anywhere and no error to show for
+    it.
+
+    So: `implemented` says code exists, `verified` says the code was proven
+    against a payload the provider actually sent, and
+    `ProviderHealth.verified_capabilities` says which calls worked just now.
+    Three different questions.
+    """
     docs_url: str | None = None
     notes: tuple[str, ...] = ()
     """Operating caveats worth showing an operator before they rely on it."""

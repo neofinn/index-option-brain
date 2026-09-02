@@ -31,13 +31,38 @@ from index_option_brain.data.providers import (
     implemented_providers,
     missing_capabilities,
     providers_serving,
+    verified_providers,
 )
 
 
 class TestTheRegistryIsHonest:
-    def test_only_nse_public_has_an_adapter(self):
-        """The one entry whose capabilities were probed rather than read."""
-        assert [p.provider_id for p in implemented_providers()] == ["nse_public"]
+    def test_two_providers_have_adapters(self):
+        assert {p.provider_id for p in implemented_providers()} == {
+            "nse_public",
+            "dhan",
+        }
+
+    def test_only_nse_public_is_verified_against_real_responses(self):
+        """"An adapter exists" and "its mapping was proven" are different
+        facts. Dhan's routes and error envelopes were verified; its response
+        bodies were not, because those need a token."""
+        assert [p.provider_id for p in verified_providers()] == ["nse_public"]
+
+    def test_dhan_says_its_mapping_is_unverified(self):
+        kite = get_provider("dhan")
+        assert kite.implemented
+        assert not kite.verified
+        joined = " ".join(kite.notes)
+        assert "Response bodies were NOT" in joined
+        assert "dhan_probe" in joined
+
+    def test_dhan_records_which_routes_the_sandbox_lacks(self):
+        """Probed on both hosts: the sandbox serves orders, funds and charts
+        but 404s on market feed and option chain. Learning that from a bare
+        404 would be a confusing afternoon."""
+        joined = " ".join(get_provider("dhan").notes)
+        assert "sandbox" in joined.lower()
+        assert "optionchain" in joined
 
     def test_every_roadmap_entry_says_it_is_unverified(self):
         """Otherwise the registry reads as a list of working integrations."""
@@ -49,8 +74,11 @@ class TestTheRegistryIsHonest:
             assert "No adapter exists yet" in joined, provider.provider_id
 
     def test_no_roadmap_entry_claims_to_be_implemented(self):
-        implemented = {p.provider_id for p in implemented_providers()}
-        assert implemented == {"nse_public"}
+        for provider in ALL_PROVIDERS:
+            if provider.provider_id in ("nse_public", "dhan"):
+                continue
+            assert not provider.implemented, provider.provider_id
+            assert not provider.verified, provider.provider_id
 
     def test_every_provider_has_documentation_to_check_against(self):
         for provider in ALL_PROVIDERS:
@@ -70,11 +98,23 @@ class TestTheRegistryIsHonest:
 
 
 class TestCapabilityQueries:
-    def test_nothing_can_serve_bars_yet(self):
-        """The live consequence of NSE's blocked history endpoint: until a
-        broker adapter exists, nothing in the registry can supply bars, and
-        the query has to say so rather than returning a documented claim."""
-        assert providers_serving(Capability.INDEX_BARS) == ()
+    def test_only_dhan_can_serve_bars(self):
+        """NSE's history endpoint blocks automated clients, so bars were the
+        gap that motivated the Dhan adapter."""
+        assert [p.provider_id for p in providers_serving(Capability.INDEX_BARS)] == [
+            "dhan"
+        ]
+
+    def test_no_verified_provider_can_serve_bars_yet(self):
+        """The stricter question, and the one that matters before relying on
+        the number: Dhan's adapter exists but its mapping is unproven, so
+        nothing verified serves bars."""
+        assert providers_serving(Capability.INDEX_BARS, verified_only=True) == ()
+
+    def test_only_dhan_can_trade(self):
+        assert [p.provider_id for p in providers_serving(Capability.ORDER_PLACEMENT)] == [
+            "dhan"
+        ]
 
     def test_nse_serves_the_chain(self):
         served = providers_serving(Capability.OPTION_CHAIN, Capability.INDIA_VIX)
@@ -86,6 +126,24 @@ class TestCapabilityQueries:
         capability with no adapter is not an answer to it."""
         assert Capability.INDEX_BARS in ZERODHA_KITE.capabilities
         assert ZERODHA_KITE not in providers_serving(Capability.INDEX_BARS)
+
+    def test_nse_and_dhan_together_cover_analysis_and_trading(self):
+        """The composition the whole capability split was designed for: NSE's
+        chain and VIX, Dhan's bars and account."""
+        from index_option_brain.data.providers import DHAN
+
+        assert (
+            missing_capabilities(
+                NSE_PUBLIC_DESCRIPTOR, DHAN, required=REQUIRED_FOR_ANALYSIS
+            )
+            == frozenset()
+        )
+        assert (
+            missing_capabilities(
+                NSE_PUBLIC_DESCRIPTOR, DHAN, required=REQUIRED_FOR_TRADING
+            )
+            == frozenset()
+        )
 
     def test_nse_alone_cannot_support_a_full_analysis(self):
         missing = missing_capabilities(

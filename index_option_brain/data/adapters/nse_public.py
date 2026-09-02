@@ -232,6 +232,9 @@ NSE_PUBLIC_DESCRIPTOR = ProviderDescriptor(
         }
     ),
     implemented=True,
+    # Every capability was probed against the live endpoint, and the
+    # parsing is pinned against recorded responses.
+    verified=True,
     docs_url="https://www.nseindia.com/option-chain",
     notes=(
         (

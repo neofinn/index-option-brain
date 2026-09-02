@@ -44,14 +44,14 @@ switch, and the engine must never require it to exist.
 | Instrument master (`data/dhan_instruments.py`) | **Implemented** — live lot size, tick size, strike step and security ids, no auth needed |
 | Execution Gate | **Implemented** — 16 blocking checks re-validated against the live market, no override path |
 | Order Manager | **Implemented** — §30 state machine, sequenced multi-leg submission, naked-short detection, reconciliation |
-| Broker adapter | Interface only — the one thing between analysis and trading |
+| **Dhan adapter** (`data/adapters/dhan.py`) | **Implemented, unverified** — bars, chain, account, orders; routes and error envelopes proven, response bodies not |
 | Feedback / learning engines | Interface only (`feedback/`) |
 | Memory (Postgres repository, Redis cache) | Interface only (`memory/`) |
 | Backtest/replay engine | Interface only (`backtest/`) |
 | Database schema | `Base` + UUID/timestamp/version mixin only — the ~27 tables from §27 are not yet modeled |
 | FastAPI app + operations console | **Implemented** — live status/providers/market/analysis endpoints, `docs/console.html` |
 
-922 tests pass; `ruff` and `mypy --strict` are clean.
+983 tests pass; `ruff` and `mypy --strict` are clean.
 
 ### Where the pipeline deliberately stops
 
@@ -356,11 +356,11 @@ heavyweight-driven rallies and assert the brains read them correctly.
 
 ## Next steps
 
-1. **A broker adapter.** The one thing standing between analysis and trading,
-   and it also closes two data gaps: historical bars (which unblocks the
-   Regime Engine) and an account (which unblocks the Risk Engine). Dhan's
-   long-lived token or Angel One's TOTP login suit an unattended process
-   better than the daily browser login the OAuth brokers require.
+1. **Verify the Dhan adapter against live responses.** It is written and
+   tested against documented shapes; `scripts/dhan_probe.py` turns that into
+   evidence. Until it has been run, `verified` is False and the number to
+   trust is `ProviderHealth.verified_capabilities`, not the descriptor's
+   claim.
 2. **Event/trigger engine** — real detection over consecutive `MarketState`
    snapshots, plus the significance filter.
 4. **Postgres schema** for spec §27, then the feedback/learning pipeline.
@@ -369,6 +369,57 @@ heavyweight-driven rallies and assert the brains read them correctly.
    a data-source and simulated-fill exercise.
 6. Optional `AIProvider` behind `IntelligenceProvider`, once there is
    something substantial for it to investigate.
+
+## Connecting Dhan
+
+Dhan closes the two gaps that stop the system short: historical bars (which
+unblock the Regime Engine) and an account (which unblocks the Risk Engine).
+Its order API needs no data subscription, and its access token is long-lived
+— which matters for an unattended process, where the daily browser login the
+OAuth brokers require is a standing operational failure.
+
+```bash
+DHAN_CLIENT_ID=... DHAN_ACCESS_TOKEN=... python scripts/dhan_probe.py
+```
+
+**The sandbox and the live host do not cover the same routes.** Probed on
+both:
+
+| Route | Sandbox | Live |
+| --- | --- | --- |
+| `/orders`, `/fundlimit` | works | works |
+| `/charts/historical`, `/charts/intraday` | works | works |
+| `/marketfeed/*` | **404** | works |
+| `/optionchain`, `/optionchain/expirylist` | **404** | works |
+
+So the order path and the account can be exercised against the sandbox with
+no money at risk, while the quote and chain mapping has to be verified against
+the live host — read-only, which is safe, but it needs the Data API
+subscription. The adapter fails those calls on the sandbox with that
+explanation rather than a bare 404.
+
+### Three different questions about a provider
+
+The registry keeps them apart, because conflating them is how a system comes
+to trust a number it should not:
+
+- **`implemented`** — an adapter exists in this codebase.
+- **`verified`** — its field mapping was proven against a payload the
+  provider actually sent.
+- **`ProviderHealth.verified_capabilities`** — which calls succeeded just now.
+
+Dhan is `implemented` and not `verified`. Its routes and both its error
+envelopes were checked against the live hosts; its response *bodies* were not,
+because those need a token. NSE is both, and the reason to care is concrete:
+NSE documents a `bidprice` field, always sends null in it, and puts the real
+top of book in `buyPrice1`. An adapter written from documentation alone would
+pass every test and produce a chain with no bid anywhere.
+
+Greeks are recomputed locally even though Dhan publishes them. Greeks depend
+on the risk-free rate and day-count convention used to derive them, and Dhan
+publishes neither — so mixing its numbers with NSE-derived ones would put two
+conventions into one delta-fit ranking, comparing quantities that are not the
+same quantity. `trust_broker_greeks=True` overrides that deliberately.
 
 ### The lot size was wrong, and how that got found
 

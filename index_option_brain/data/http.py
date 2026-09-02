@@ -73,6 +73,18 @@ class HttpSession(Protocol):
         headers: Mapping[str, str] | None = None,
     ) -> HttpResponse: ...
 
+    async def post(
+        self,
+        url: str,
+        *,
+        json: Any | None = None,
+        headers: Mapping[str, str] | None = None,
+    ) -> HttpResponse: ...
+
+    async def delete(
+        self, url: str, *, headers: Mapping[str, str] | None = None
+    ) -> HttpResponse: ...
+
     async def aclose(self) -> None: ...
 
 
@@ -141,6 +153,40 @@ class HttpxSession:
             headers=dict(response.headers),
         )
 
+    async def post(
+        self,
+        url: str,
+        *,
+        json: Any | None = None,
+        headers: Mapping[str, str] | None = None,
+    ) -> HttpResponse:
+        try:
+            response = await self._client.post(
+                url, json=json, headers=dict(headers) if headers else None
+            )
+        except Exception as exc:
+            raise HttpError(f"POST {url} failed: {type(exc).__name__}: {exc}") from exc
+        return HttpResponse(
+            status_code=response.status_code,
+            text=response.text,
+            headers=dict(response.headers),
+        )
+
+    async def delete(
+        self, url: str, *, headers: Mapping[str, str] | None = None
+    ) -> HttpResponse:
+        try:
+            response = await self._client.delete(
+                url, headers=dict(headers) if headers else None
+            )
+        except Exception as exc:
+            raise HttpError(f"DELETE {url} failed: {type(exc).__name__}: {exc}") from exc
+        return HttpResponse(
+            status_code=response.status_code,
+            text=response.text,
+            headers=dict(response.headers),
+        )
+
     async def aclose(self) -> None:
         await self._client.aclose()
 
@@ -166,6 +212,11 @@ class RecordedSession:
             for key, value in routes.items()
         }
         self.requests: list[str] = []
+        self.deleted: list[str] = []
+        self.posted: list[tuple[str, Any]] = []
+        """Every POST with its body, so a test can assert what was asked for
+        as well as what came back — which is where a wrong segment code or a
+        mis-ordered date range shows up."""
 
     async def get(
         self,
@@ -182,6 +233,30 @@ class RecordedSession:
             if key in full:
                 return response
         raise HttpError(f"RecordedSession has no route matching {full}")
+
+    async def post(
+        self,
+        url: str,
+        *,
+        json: Any | None = None,
+        headers: Mapping[str, str] | None = None,
+    ) -> HttpResponse:
+        self.posted.append((url, json))
+        self.requests.append(url)
+        for key, response in self._routes.items():
+            if key in url:
+                return response
+        raise HttpError(f"RecordedSession has no route matching {url}")
+
+    async def delete(
+        self, url: str, *, headers: Mapping[str, str] | None = None
+    ) -> HttpResponse:
+        self.deleted.append(url)
+        self.requests.append(url)
+        for key, response in self._routes.items():
+            if key in url:
+                return response
+        raise HttpError(f"RecordedSession has no route matching {url}")
 
     async def aclose(self) -> None:
         return None

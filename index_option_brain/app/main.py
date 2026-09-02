@@ -36,6 +36,7 @@ from index_option_brain.data.providers import (
     REQUIRED_FOR_TRADING,
     implemented_providers,
     missing_capabilities,
+    verified_providers,
 )
 
 CONSOLE_HTML = Path(__file__).resolve().parents[2] / "docs" / "console.html"
@@ -52,6 +53,9 @@ def _describe(provider: ProviderDescriptor, health: Any) -> dict[str, Any]:
         "kind": str(provider.kind),
         "auth": str(provider.auth),
         "implemented": provider.implemented,
+        # Three different questions: code exists, mapping proven against a
+        # real payload, and calls that succeeded just now.
+        "verified": provider.verified,
         "docs_url": provider.docs_url,
         "notes": list(provider.notes),
         "can_trade": provider.can_trade,
@@ -192,8 +196,11 @@ def create_app(
             "instrument_source": live.instrument_source,
             "trading_enabled": False,
             "trading_blocked_reason": (
-                "No broker adapter is implemented, so no order can be placed. "
-                "The system is analysis-only until one is connected."
+                "A broker adapter exists (Dhan), but this process is not wired "
+                "to it: no credentials are configured, and its response mapping "
+                "has not been verified against live payloads — run "
+                "scripts/dhan_probe.py. The system is analysis-only until both "
+                "are done."
             ),
             "coverage": {
                 "analysis": {
@@ -232,6 +239,7 @@ def create_app(
                 for provider in ALL_PROVIDERS
             ],
             "implemented_count": len(implemented_providers()),
+            "verified_count": len(verified_providers()),
             "total_count": len(ALL_PROVIDERS),
         }
 

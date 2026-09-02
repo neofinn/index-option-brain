@@ -62,27 +62,28 @@ class TestStatus:
         assert body["run_mode"]
 
     def test_trading_is_disabled_with_a_stated_reason(self, client: TestClient):
-        """No broker adapter exists, and the console must say so rather than
-        showing an execution panel that cannot work."""
+        """A broker adapter now exists, but the running system is not wired to
+        it — no credentials, and its mapping is unverified. The console must
+        say that rather than showing an execution panel that cannot work."""
         body = client.get("/api/status").json()
         assert body["trading_enabled"] is False
-        assert "No broker adapter" in body["trading_blocked_reason"]
+        assert body["trading_blocked_reason"]
 
     def test_coverage_names_what_is_missing(self, client: TestClient):
         body = client.get("/api/status").json()
-        assert body["coverage"]["analysis"]["missing"] == ["INDEX_BARS"]
-        assert set(body["coverage"]["trading"]["missing"]) == {
-            "ACCOUNT_SNAPSHOT",
-            "ORDER_PLACEMENT",
-            "POSITION_BOOK",
-        }
+        # Dhan's adapter closes both gaps on paper. Whether its mapping is
+        # right is a separate question, which `verified` answers.
+        assert body["coverage"]["analysis"]["missing"] == []
+        assert body["coverage"]["trading"]["missing"] == []
 
 
 class TestProviders:
     def test_it_lists_every_provider(self, client: TestClient):
         body = client.get("/api/providers").json()
         assert body["total_count"] == len(body["providers"])
-        assert body["implemented_count"] == 1
+        assert body["implemented_count"] == 2
+        # Only NSE's mapping has been proven against real payloads.
+        assert body["verified_count"] == 1
 
     def test_unprobed_health_is_not_configured_rather_than_zeroed(
         self, client: TestClient
