@@ -27,6 +27,7 @@ from typing import Any
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, JSONResponse
 
+from index_option_brain.agent import NarrativeProvider
 from index_option_brain.app.live import FeedUnavailable, LiveEngine, session_label
 from index_option_brain.app.runner import MarketPoller, PollerConfig
 from index_option_brain.config.settings import get_settings
@@ -343,6 +344,16 @@ def create_app(
         regime = result.regime
         signal = result.signal
         candidate = result.best_candidate
+        # Deterministic, free, and available with LLM_ENABLED=false — which is
+        # why the console can render an explanation on every cycle.
+        brief = NarrativeProvider().describe(
+            analysis=result.state.analysis,
+            regime=regime,
+            signal=signal,
+            strategy=result.selected_strategy,
+            candidate=candidate,
+            is_authorized=result.is_authorized,
+        )
 
         return {
             "available": True,
@@ -358,6 +369,14 @@ def create_app(
                 "direction": str(signal.direction),
                 "score": signal.score,
                 "evidence": list(signal.evidence),
+            },
+            "brief": {
+                "summary": brief.summary,
+                "supporting": brief.supporting_points,
+                "contradicting": brief.contradicting_points,
+                "unknowns": brief.unknowns,
+                "sources": brief.sources,
+                "provider": brief.provider,
             },
             "strategy": str(result.selected_strategy),
             "is_actionable": result.is_actionable,
@@ -385,6 +404,12 @@ def create_app(
                     "net_premium": float(candidate.net_premium),
                     "is_credit": candidate.is_credit,
                     "reward_to_risk": candidate.reward_to_risk,
+                    "net_reward_to_risk": candidate.net_reward_to_risk,
+                    "round_trip_cost": float(candidate.round_trip_cost),
+                    "cost_share_of_profit": candidate.cost_share_of_profit,
+                    # The two numbers that decide a buy.
+                    "breakeven_sigmas": candidate.breakeven_sigmas,
+                    "probability_of_profit": candidate.probability_of_profit,
                     "score": candidate.score,
                     "liquidity_score": candidate.liquidity_score,
                     "worst_relative_spread": candidate.worst_relative_spread,

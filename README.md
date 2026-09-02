@@ -35,7 +35,7 @@ switch, and the engine must never require it to exist.
 | Event / Trigger Engine (`events/`) | **Implemented** — 26 of 30 triggers detected; the other 4 are calendar facts with no source |
 | Significance filter | **Implemented** — score floor plus per-trigger cooldown, so the engine stays quiet when the market is |
 | Failure contract (§29) | **Implemented** — explicit domain→action mapping (`risk/failure_policy.py`) |
-| `IntelligenceProvider` / `DeterministicProvider` / agent tools | **Implemented** — the deterministic provider is the always-on default |
+| Agent / LLM layer (`agent/`) | **Implemented** — a deterministic narrative provider, and a *tested* wall between assessments and decisions |
 | Risk Engine | **Implemented** — authoritative sizing from four budgets, fail-closed, no override path |
 | Transaction cost model (`analytics/costs.py`) | **Implemented** — brokerage, STT, exchange, SEBI, stamp, GST; ranking is net of costs |
 | Black-Scholes pricing / greeks (`analytics/`) | **Implemented** — production, because no Indian feed publishes greeks |
@@ -53,7 +53,7 @@ switch, and the engine must never require it to exist.
 | Database schema | `Base` + UUID/timestamp/version mixin only — the ~27 tables from §27 are not yet modeled |
 | FastAPI app + operations console | **Implemented** — live status/providers/market/analysis endpoints, `index_option_brain/app/static/console.html` |
 
-1,032 tests pass; `ruff` and `mypy --strict` are clean.
+1,097 tests pass; `ruff` and `mypy --strict` are clean.
 
 ### Where the pipeline deliberately stops
 
@@ -431,6 +431,56 @@ on the risk-free rate and day-count convention used to derive them, and Dhan
 publishes neither — so mixing its numbers with NSE-derived ones would put two
 conventions into one delta-fit ranking, comparing quantities that are not the
 same quantity. `trust_broker_greeks=True` overrides that deliberately.
+
+## The agent and LLM layer
+
+Spec §23 says an agent may not override risk, the execution gate, position
+limits or maximum loss. A docstring saying so is worth nothing, so the
+guarantee is a test: **no module under `brain/`, `risk/`, `execution/`,
+`state/` or `events/` may import `agent/`** — and the agent package may not
+import `risk/` or `execution/` either. The wall is two-way, and adding a
+route through it fails the suite rather than a review.
+
+`AgentAssessment` carries only text. There is deliberately no score, no size,
+no direction, and no `recommendation` or `confidence` field: a recommendation
+is one step from a decision and a number invites being multiplied into one. A
+test asserts every field is non-numeric.
+
+### Most of what you want an LLM for here does not need one
+
+`NarrativeProvider` turns the analysis into a paragraph with no model at all,
+because the brains already emit structured evidence with every score — the
+missing piece was ordering it and writing it down, which is deterministic
+work. Live, on a market with no bar history:
+
+> The regime is UNCERTAIN (confidence 0.00). No directional signal cleared the
+> gates. Implied volatility sits at the 13% percentile, which favours paying
+> premium. The market is pricing a 306-point one-sigma move to expiry. So the
+> selected action is to stand aside.
+>
+> **Unknowns:** the index brain measured nothing this cycle; the constituents
+> brain measured nothing this cycle.
+
+That is available with `LLM_ENABLED=false`, costs nothing per call so the
+console renders it every cycle, and **cannot hallucinate** — every sentence is
+assembled from a field that was measured, so there is no failure mode where
+the summary describes a market the engine did not observe. It also names what
+it does not know, because an investigation layer that only reports findings is
+one that always finds something.
+
+### What is actually left for a model
+
+Three jobs, all needing knowledge from outside the feed:
+
+1. **Explaining an anomaly.** The straddle diverging from what IV implies says
+   something is wrong and cannot say what.
+2. **The event calendar.** The same gap the four unreachable triggers have —
+   RBI decisions, the Budget, index rebalances.
+3. **Post-mortems.** Why a thesis failed, in terms the numbers do not carry.
+
+Those are where an `AIProvider` earns its place. Building the explanation job
+as though it needed one would have made the console depend on an API key to
+describe itself.
 
 ### Costs are not a rounding error
 
