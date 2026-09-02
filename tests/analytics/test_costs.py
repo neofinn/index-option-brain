@@ -290,3 +290,126 @@ class TestStructuresCarryTheirCost:
         assert one is not None and ten is not None
         assert ten.round_trip_cost > one.round_trip_cost
         assert ten.round_trip_cost < one.round_trip_cost * 10
+
+
+class TestBreakevenOdds:
+    """The decisive numbers when buying premium.
+
+    A long option only pays if the index travels past strike plus premium.
+    Expressed in sigmas that becomes answerable: 0.4 is close, 2.0 is a
+    lottery ticket. Measured on the live chain at 6 DTE, an ATM long call
+    needed 0.38 sigma and a 24,200 call needed 1.03.
+    """
+
+    def candidate(
+        self,
+        *,
+        breakevens: list[str],
+        net_premium: str,
+        spot: str = "23900",
+        expected_move: str | None = "305.54",
+    ):
+        from decimal import Decimal as D
+
+        from index_option_brain.brain.structures import _breakeven_odds
+
+        return _breakeven_odds(
+            [D(b) for b in breakevens],
+            D(spot),
+            D(net_premium),
+            D(expected_move) if expected_move else None,
+        )
+
+    def test_a_near_breakeven_is_a_fraction_of_a_sigma(self):
+        sigmas, _ = self.candidate(breakevens=["24032"], net_premium="8500")
+        assert sigmas == pytest.approx(0.43, abs=0.02)
+
+    def test_a_far_breakeven_is_more_than_a_sigma(self):
+        sigmas, _ = self.candidate(breakevens=["24250"], net_premium="3000")
+        assert sigmas is not None
+        assert sigmas > 1.0
+
+    def test_a_debit_needs_the_move_to_happen(self):
+        """So its probability is the tail beyond the breakeven, and it falls
+        as the breakeven gets further away."""
+        _, near = self.candidate(breakevens=["24000"], net_premium="8500")
+        _, far = self.candidate(breakevens=["24400"], net_premium="3000")
+        assert near is not None and far is not None
+        assert near > far
+        assert far < 0.2
+
+    def test_a_credit_needs_the_move_not_to_happen(self):
+        """Opposite question. Reporting one number for both would give a 90%
+        chance of success to the trade with a 10% chance of it."""
+        _, credit = self.candidate(breakevens=["23672"], net_premium="-1800")
+        _, debit = self.candidate(breakevens=["23672"], net_premium="1800")
+        assert credit is not None and debit is not None
+        assert credit > 0.7
+        assert debit < 0.3
+        assert credit + debit == pytest.approx(1.0, abs=1e-6)
+
+    def test_the_nearest_breakeven_is_the_one_that_counts(self):
+        """It decides whether the structure pays at all."""
+        near_only, _ = self.candidate(breakevens=["24000"], net_premium="1000")
+        both, _ = self.candidate(breakevens=["24000", "25500"], net_premium="1000")
+        assert near_only == both
+
+    def test_no_expected_move_means_no_odds(self):
+        """A fabricated sigma would put a fabricated probability on every
+        candidate."""
+        sigmas, probability = self.candidate(
+            breakevens=["24000"], net_premium="1000", expected_move=None
+        )
+        assert sigmas is None
+        assert probability is None
+
+    def test_a_zero_expected_move_means_no_odds(self):
+        sigmas, _ = self.candidate(
+            breakevens=["24000"], net_premium="1000", expected_move="0"
+        )
+        assert sigmas is None
+
+    def test_no_breakeven_means_no_odds(self):
+        sigmas, _ = self.candidate(breakevens=[], net_premium="1000")
+        assert sigmas is None
+
+    def test_a_built_structure_carries_them(self, view):
+        from decimal import Decimal as D
+
+        from index_option_brain.brain.structures import build_structure
+
+        candidate = build_structure(
+            StrategyType.LONG_CALL, view, anchor_offset=0, width_steps=1,
+            expected_move=D(400),
+        )
+        assert candidate is not None
+        assert candidate.breakeven_sigmas is not None
+        assert candidate.probability_of_profit is not None
+        assert 0.0 < candidate.probability_of_profit < 1.0
+
+    def test_they_are_absent_when_no_move_is_supplied(self, view):
+        from index_option_brain.brain.structures import build_structure
+
+        candidate = build_structure(
+            StrategyType.LONG_CALL, view, anchor_offset=0, width_steps=1
+        )
+        assert candidate is not None
+        assert candidate.breakeven_sigmas is None
+        assert candidate.probability_of_profit is None
+
+
+class TestBuyingIsCheaperToExecuteHere:
+    """Measured on the live chain: cost is 1.0-1.5% of a debit spread's max
+    profit against 5.6% of the credit spread's. Flat brokerage is a smaller
+    share of a larger premium, which is the mirror image of what makes
+    far-OTM selling expensive."""
+
+    def test_a_larger_premium_gives_up_less_to_flat_fees(self):
+        cheap = DEFAULT_COST_MODEL.round_trip(
+            [(Decimal(10) * LOT, OrderSide.SELL)]
+        )
+        rich = DEFAULT_COST_MODEL.round_trip(
+            [(Decimal(130) * LOT, OrderSide.SELL)]
+        )
+        # Thirteen times the turnover, nothing like thirteen times the cost.
+        assert rich < cheap * 4

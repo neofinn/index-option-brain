@@ -44,6 +44,31 @@ class StrikeCandidate(BaseModel):
     max_profit: Decimal | None
     breakeven: list[Decimal] = Field(default_factory=list)
     rationale: str = ""
+    breakeven_sigmas: float | None = None
+    """Distance from spot to the nearest breakeven, in one-sigma moves.
+
+    The decisive number when buying premium. A long option only pays if the
+    index travels past strike plus premium, and expressing that distance in
+    sigmas turns "is this far?" into an answerable question: 1.0 is a move the
+    market prices as roughly a one-in-three chance, 2.0 is one-in-forty.
+
+    It is the reason the two "expected move" formulas had to be told apart. If
+    the straddle figure is used as a one-sigma band, every breakeven here
+    looks 20% closer than it is.
+    """
+    probability_of_profit: float | None = None
+    """Rough chance the structure finishes profitable.
+
+    A **zero-drift normal approximation** to the terminal distribution: it
+    ignores drift, the volatility smile, early management, and the whole path.
+    Directional for a debit (the move has to happen) and containment for a
+    credit (it has to not happen), because those are opposite questions.
+
+    Deliberately not fed into position sizing. It is an order-of-magnitude
+    sanity check on whether a structure is a lottery ticket, and treating a
+    normal approximation as a real probability is how a model starts sizing on
+    its own assumptions.
+    """
     round_trip_cost: Decimal = Decimal(0)
     """Brokerage, STT, exchange, SEBI, stamp and GST to open *and* close this
     structure at this size.

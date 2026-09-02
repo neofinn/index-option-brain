@@ -175,7 +175,11 @@ class DeterministicStrategyEngine(StrategyEngine):
         out: list[StrategyCandidate] = []
         for strategy, anchor, reason in plans:
             structure = structures.build_structure(
-                strategy, view, anchor_offset=anchor, width_steps=width_steps
+                strategy,
+                view,
+                anchor_offset=anchor,
+                width_steps=width_steps,
+                expected_move=analysis.volatility.expected_move,
             )
             if structure is None:
                 continue
@@ -218,6 +222,7 @@ class DeterministicStrategyEngine(StrategyEngine):
             view,
             anchor_offset=short_offset,
             width_steps=wing_width,
+            expected_move=analysis.volatility.expected_move,
         )
         if structure is None:
             return None

@@ -88,6 +88,15 @@ class VolatilityBrainConfig(_Config):
     new series as a volatility extreme."""
     trading_days_per_year: int = 252
     calendar_days_per_year: int = 365
+    vix_percentile_richness_weight: float = 0.6
+    """How far a VIX-percentile fallback may move the richness score.
+
+    Below 1.0 on purpose. Richness is IV against *realized*, and the VIX
+    percentile is IV against its own history — a related question, not the
+    same one. IV can sit at the 13th percentile and still be dear if the index
+    has gone completely quiet. As a stand-in when realized volatility is
+    unavailable it is worth having and worth discounting.
+    """
     max_straddle_divergence: float = 0.08
     """How far the observed ATM straddle may sit from what ATM IV implies
     before it is reported as a dislocation.

@@ -17,6 +17,7 @@ lots), not per-unit premiums.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from decimal import Decimal
 from itertools import pairwise
@@ -229,6 +230,38 @@ def _economics(
     return None
 
 
+def _breakeven_odds(
+    breakevens: list[Decimal],
+    spot: Decimal,
+    net_premium: Decimal,
+    expected_move: Decimal | float | None,
+) -> tuple[float | None, float | None]:
+    """How far the index must travel, in sigmas, and roughly how likely that is.
+
+    Measured to the **nearest** breakeven, because that is the one that
+    decides whether the structure pays at all.
+
+    The probability is a zero-drift normal approximation, and the two cases
+    are opposite questions: a debit needs the move to happen, so it takes the
+    tail beyond the breakeven; a credit needs it not to, so it takes the body
+    inside. Returning one number for both without that distinction would
+    report a 90% chance of success for the trade with a 10% chance of it.
+    """
+    if not breakevens or expected_move is None:
+        return None, None
+    sigma = float(expected_move)
+    if sigma <= 0:
+        return None, None
+
+    distance = min(abs(float(level) - float(spot)) for level in breakevens)
+    sigmas = distance / sigma
+    # Normal CDF via erf: no scipy dependency for one number.
+    inside = 0.5 * (1.0 + math.erf(sigmas / math.sqrt(2.0)))
+    is_debit = net_premium > 0
+    probability = (1.0 - inside) if is_debit else inside
+    return round(sigmas, 4), round(probability, 4)
+
+
 def build_structure(
     strategy: StrategyType,
     view: ChainView,
@@ -238,6 +271,7 @@ def build_structure(
     lots: int = 1,
     max_relative_spread: float = 0.08,
     cost_model: IndianOptionCostModel | None = None,
+    expected_move: Decimal | float | None = None,
 ) -> StrikeCandidate | None:
     """Build one executable structure, or None if the chain can't support it.
 
@@ -326,6 +360,10 @@ def build_structure(
     # Costs are computed from the legs as priced, at this size. Charges fall
     # on premium turnover, not on the notional of the underlying — using
     # notional would overstate them by two orders of magnitude.
+    breakeven_sigmas, probability = _breakeven_odds(
+        breakevens, view.spot, net_premium, expected_move
+    )
+
     model = cost_model or DEFAULT_COST_MODEL
     round_trip_cost = model.round_trip(
         [
@@ -351,4 +389,6 @@ def build_structure(
         breakeven=breakevens,
         rationale="",
         round_trip_cost=round_trip_cost,
+        breakeven_sigmas=breakeven_sigmas,
+        probability_of_profit=probability,
     )

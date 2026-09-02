@@ -87,6 +87,32 @@ class VolatilityState(BaseModel):
 
     india_vix: float | None = None
     india_vix_previous_close: float | None = None
+    india_vix_year_high: float | None = None
+    india_vix_year_low: float | None = None
+    """The 52-week range of India VIX, as the exchange publishes it.
+
+    Worth carrying because it gives implied-volatility *context on the first
+    tick*. Ranking ATM IV against its own history needs twenty-odd
+    observations, which is weeks of uptime on a feed with no history — until
+    then the system has no idea whether premium is historically cheap or dear.
+    The exchange publishes this range with every snapshot, for free.
+    """
+
+    @property
+    def india_vix_percentile(self) -> float | None:
+        """Where India VIX sits in its own 52-week range, 0 to 1.
+
+        A level measure, not a richness measure: it says implied volatility is
+        low against its own history, not that it is cheap against what the
+        index is actually doing. The two are different questions and the
+        Volatility brain keeps them apart.
+        """
+        current = self.india_vix
+        high = self.india_vix_year_high
+        low = self.india_vix_year_low
+        if current is None or high is None or low is None or high <= low:
+            return None
+        return max(0.0, min(1.0, (current - low) / (high - low)))
     realized_volatility: float | None = None
     atm_iv: float | None = None
     atm_iv_history: list[float] = Field(default_factory=list)

@@ -580,6 +580,23 @@ class NsePublicAdapter(IndexDataAdapter, OptionsChainAdapter, VolatilityDataAdap
         previous = _to_decimal(row.get("previousClose"), "previousClose")
         return float(current), float(previous)
 
+    async def get_india_vix_range(self) -> tuple[float, float] | None:
+        """The 52-week range, from the same cached snapshot as the level.
+
+        No extra request: `yearHigh` and `yearLow` ride along on the
+        all-indices payload that already supplies the spot and the VIX. A
+        missing or degenerate range returns None rather than a fabricated
+        band, since a zero-width range would put every reading at the same
+        percentile.
+        """
+        payload = await self._all_indices()
+        row = self._index_row(payload, NSE_INDIA_VIX_NAME)
+        high = _optional_decimal(row.get("yearHigh"))
+        low = _optional_decimal(row.get("yearLow"))
+        if high is None or low is None or high <= low:
+            return None
+        return float(high), float(low)
+
     # ---------------------------------------------------------- option data
 
     async def get_available_expiries(self, underlying_symbol: str) -> list[date]:

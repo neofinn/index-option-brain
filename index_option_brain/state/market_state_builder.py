@@ -152,8 +152,15 @@ class MarketStateBuilder:
         sectors = {s.symbol: s.sector for s in constituent_specs}
 
         vix = vix_previous = None
+        vix_year_high = vix_year_low = None
         if self._volatility_adapter is not None:
             vix, vix_previous = await self._volatility_adapter.get_india_vix()
+            # Optional and free: the 52-week range rides along on the same
+            # payload, and it is what gives volatility context before there is
+            # any IV history to rank against.
+            vix_range = await self._volatility_adapter.get_india_vix_range()
+            if vix_range is not None:
+                vix_year_high, vix_year_low = vix_range
 
         atm_iv = self._atm_iv(chain, quote.ltp)
         if atm_iv is not None and self._iv_history is not None:
@@ -184,6 +191,8 @@ class MarketStateBuilder:
             volatility_state=VolatilityState(
                 india_vix=vix,
                 india_vix_previous_close=vix_previous,
+                india_vix_year_high=vix_year_high,
+                india_vix_year_low=vix_year_low,
                 realized_volatility=self._realized_volatility(daily_bars),
                 atm_iv=atm_iv,
                 atm_iv_history=history,

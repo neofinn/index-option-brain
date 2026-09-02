@@ -19,7 +19,9 @@ and it is better to never have proposed it.
 
 from __future__ import annotations
 
+import math
 from abc import ABC, abstractmethod
+from decimal import Decimal
 
 from index_option_brain.brain import indicators as ind
 from index_option_brain.brain import structures
@@ -69,6 +71,11 @@ class DeterministicStrikeEngine(StrikeEngine):
             return []
 
         width_range = self._width_range(state, view)
+        # The Strike Engine ranks from MarketState rather than the analysis
+        # bundle, so the expected move comes from the state's own volatility
+        # slice. None is fine: the breakeven odds are then simply not
+        # reported, which is better than reporting them against a guess.
+        expected_move = self._expected_move(state)
         scored: list[StrikeCandidate] = []
 
         for anchor in _ANCHOR_OFFSETS.get(strategy, range(-2, 3)):
@@ -79,6 +86,7 @@ class DeterministicStrikeEngine(StrikeEngine):
                     anchor_offset=anchor,
                     width_steps=width,
                     max_relative_spread=cfg.max_relative_spread,
+                    expected_move=expected_move,
                 )
                 if structure is None:
                     continue
@@ -90,6 +98,23 @@ class DeterministicStrikeEngine(StrikeEngine):
 
         scored.sort(key=lambda c: c.score, reverse=True)
         return scored[: cfg.max_candidates]
+
+    def _expected_move(self, state: MarketState) -> Decimal | None:
+        """One sigma to expiry, from spot, ATM IV and calendar time.
+
+        Recomputed here rather than threaded through, because the Strike
+        Engine's interface takes a MarketState and not an analysis bundle.
+        Same formula as the Volatility brain's, and it returns None on
+        anything missing rather than substituting a value — a fabricated
+        sigma would put a fabricated probability on every candidate.
+        """
+        volatility = state.volatility_state
+        atm_iv = volatility.atm_iv
+        days = volatility.days_to_expiry
+        if atm_iv is None or days is None or days <= 0:
+            return None
+        sigma = float(state.spot) * (atm_iv / 100.0) * math.sqrt(days / 365.0)
+        return Decimal(str(round(sigma, 4))) if sigma > 0 else None
 
     def _width_range(self, state: MarketState, view: structures.ChainView) -> range:
         """Widths worth considering, anchored on the expected move so the

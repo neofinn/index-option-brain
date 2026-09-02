@@ -87,6 +87,16 @@ class VolatilityDataAdapter(ABC):
         """Returns (current, previous_close) for India VIX."""
         ...
 
+    async def get_india_vix_range(self) -> tuple[float, float] | None:
+        """The 52-week (high, low) for India VIX, or None if unavailable.
+
+        Optional, with a default, because not every provider publishes it —
+        and a provider that does not must return None rather than a guess. It
+        is worth asking for: it gives implied-volatility context immediately,
+        where ranking ATM IV against its own history takes weeks of uptime.
+        """
+        return None
+
 
 class AccountDataAdapter(ABC):
     @abstractmethod

@@ -75,14 +75,23 @@ class DeterministicVolatilityEngine(VolatilityEngine):
             if atm_iv is not None and rankable
             else None
         )
+        # Where implied volatility sits is a question the exchange can answer
+        # immediately, via India VIX's own 52-week range, when there is no ATM
+        # IV history to rank against yet.
+        percentile_from_vix = False
+        if iv_percentile is None:
+            iv_percentile, level_evidence = self._level_fallback(state, cfg)
+            if iv_percentile is not None:
+                percentile_from_vix = True
+                evidence.extend(level_evidence)
         regime = self._regime(iv_percentile, cfg)
         if atm_iv is not None:
-            if iv_percentile is not None:
+            if iv_percentile is not None and not percentile_from_vix:
                 evidence.append(
                     f"ATM IV {atm_iv:.2f}% sits at the {iv_percentile * 100:.0f}th percentile "
                     f"of {len(history)} observations -> {regime.value}"
                 )
-            else:
+            elif iv_percentile is None:
                 evidence.append(
                     f"ATM IV {atm_iv:.2f}% with only {len(history)} historical observations — "
                     f"too few to rank, reporting {regime.value}"
@@ -97,6 +106,27 @@ class DeterministicVolatilityEngine(VolatilityEngine):
             richness = "rich" if iv_score > 0 else "cheap"
             evidence.append(
                 f"IV/RV {iv_rv_ratio:.2f} (realized {realized:.2f}%) — premium looks {richness}"
+            )
+        elif iv_percentile is not None:
+            # No realized volatility to compare against — which is the state
+            # of things until enough daily bars exist. Without a stand-in,
+            # richness stays 0.00 and the Strategy Engine can never reach
+            # either the "collect premium" or the "pay premium" branch, so it
+            # is structurally unable to prefer buying however cheap options
+            # get.
+            #
+            # Discounted, because this answers a related question rather than
+            # the same one: IV can sit at the 13th percentile of its own range
+            # and still be dear if the index has gone completely quiet.
+            iv_score = (
+                (iv_percentile - 0.5) * 2.0 * cfg.vix_percentile_richness_weight
+            )
+            richness = "historically dear" if iv_score > 0 else "historically cheap"
+            evidence.append(
+                f"No realized volatility to compare against, so richness is "
+                f"inferred from the {iv_percentile * 100:.0f}th-percentile "
+                f"volatility level ({iv_score:+.2f}) — premium looks {richness}, "
+                "on a weaker signal than IV against realized"
             )
 
         expansion_score, expansion_evidence = self._expansion(
@@ -140,6 +170,35 @@ class DeterministicVolatilityEngine(VolatilityEngine):
             days_to_expiry=days_to_expiry,
             evidence=evidence,
         )
+
+    def _level_fallback(
+        self, state: MarketState, cfg: VolatilityBrainConfig
+    ) -> tuple[float | None, list[str]]:
+        """Where implied volatility sits, when there is no IV history to rank.
+
+        Ranking ATM IV against its own history needs twenty-odd observations,
+        which on a feed with no history is weeks of uptime — and until then
+        the system cannot tell historically cheap premium from dear. The
+        exchange publishes India VIX's own 52-week range with every snapshot,
+        which answers the same question immediately and for free.
+
+        A different instrument, so it is a fallback rather than a
+        substitute: it is used only when ATM IV cannot be ranked, and the
+        evidence says which one produced the number.
+        """
+        percentile = state.volatility_state.india_vix_percentile
+        if percentile is None:
+            return None, []
+        vix = state.volatility_state.india_vix
+        low = state.volatility_state.india_vix_year_low
+        high = state.volatility_state.india_vix_year_high
+        return percentile, [
+            (
+                f"India VIX {vix:.2f} sits at the {percentile * 100:.0f}th "
+                f"percentile of its 52-week range ({low:.2f}-{high:.2f}) — "
+                "used because there is no ATM IV history to rank against yet"
+            )
+        ]
 
     def _atm_iv_from_chain(self, state: MarketState) -> float | None:
         """Fallback when the data layer didn't supply an ATM IV: take it from
