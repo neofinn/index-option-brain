@@ -1,0 +1,1805 @@
+<title>Index Brain Console</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+
+<style>
+  /* ============================================================
+     TOKENS — complete light palette on bare :root, then redefined
+     for the two dark states. Nothing is defined only inside a
+     media/[data-theme] block.
+
+     Semantic system: brass = "you must act", green = healthy/up,
+     red = blocked/down, cyan = live data. There is deliberately no
+     yellow "warning" state, because it would collide with brass.
+
+     The up/down pair is lightness-split on purpose: that split is
+     what earns a deuteranopia separation of dE 21 instead of the
+     dE 7 a naive green/red pair scores.
+     ============================================================ */
+  :root {
+    color-scheme: light;
+
+    --ground: #F5F7F9;
+    --panel: #FFFFFF;
+    --panel-2: #EDF1F4;
+    --sunk: #E4EAEE;
+    --line: #D3DBE1;
+    --line-soft: #E5EAEE;
+
+    --text: #171F27;
+    --text-2: #46545F;
+    --muted: #6C7B87;
+    --faint: #8A98A3;
+
+    --brass: #9A6B1E;
+    --brass-ink: #7A5416;
+    --brass-wash: #F3EADA;
+    --up: #1B9E6E;
+    --up-wash: #E0F0E8;
+    --down: #C0343F;
+    --down-wash: #F7E4E5;
+    --wire: #2C7E99;
+    --wire-wash: #E1EDF2;
+
+    --shadow: 0 1px 2px rgba(23, 31, 39, .06), 0 6px 20px -12px rgba(23, 31, 39, .18);
+
+    --f-display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+    --f-body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+    --f-data: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+    --r-sm: 3px;
+    --r-md: 5px;
+    --gutter: clamp(16px, 3vw, 34px);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --ground: #0E1318;
+      --panel: #161C24;
+      --panel-2: #1D242E;
+      --sunk: #11171E;
+      --line: #2A333F;
+      --line-soft: #212933;
+
+      --text: #E4E9EE;
+      --text-2: #B4C0CB;
+      --muted: #8D9AA8;
+      --faint: #6B7784;
+
+      --brass: #C9964A;
+      --brass-ink: #E0B475;
+      --brass-wash: #2A2318;
+      --up: #55CE9A;
+      --up-wash: #16271F;
+      --down: #BC404C;
+      --down-wash: #29171A;
+      --wire: #5AA9C4;
+      --wire-wash: #15222A;
+
+      --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 10px 28px -16px rgba(0, 0, 0, .7);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --ground: #0E1318;
+    --panel: #161C24;
+    --panel-2: #1D242E;
+    --sunk: #11171E;
+    --line: #2A333F;
+    --line-soft: #212933;
+
+    --text: #E4E9EE;
+    --text-2: #B4C0CB;
+    --muted: #8D9AA8;
+    --faint: #6B7784;
+
+    --brass: #C9964A;
+    --brass-ink: #E0B475;
+    --brass-wash: #2A2318;
+    --up: #55CE9A;
+    --up-wash: #16271F;
+    --down: #BC404C;
+    --down-wash: #29171A;
+    --wire: #5AA9C4;
+    --wire-wash: #15222A;
+
+    --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 10px 28px -16px rgba(0, 0, 0, .7);
+  }
+
+  /* ============================================================ BASE */
+  *, *::before, *::after { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--text);
+    font-family: var(--f-body);
+    font-size: 14px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .shell {
+    max-width: 1320px;
+    margin: 0 auto;
+    padding: 0 var(--gutter) 72px;
+  }
+
+  h1, h2, h3, h4 { font-family: var(--f-display); text-wrap: balance; margin: 0; }
+
+  .num, .mono { font-family: var(--f-data); font-variant-numeric: tabular-nums; }
+
+  a { color: var(--wire); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+
+  :focus-visible {
+    outline: 2px solid var(--brass);
+    outline-offset: 2px;
+    border-radius: 2px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+  }
+
+  /* Micro-label: the instrument-panel voice used for every field name */
+  .lab {
+    font-family: var(--f-body);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--faint);
+  }
+
+  /* ============================================================ MASTHEAD */
+  .masthead {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 18px;
+    padding: 30px 0 20px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .wordmark { display: flex; align-items: baseline; gap: 11px; }
+
+  .wordmark h1 {
+    font-size: clamp(21px, 3.1vw, 29px);
+    font-weight: 700;
+    letter-spacing: -.022em;
+  }
+
+  .wordmark .glyph {
+    font-family: var(--f-data);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--brass);
+    border: 1px solid var(--brass);
+    border-radius: var(--r-sm);
+    padding: 1px 6px;
+    letter-spacing: .04em;
+    white-space: nowrap;
+  }
+
+  .masthead p { margin: 5px 0 0; color: var(--muted); max-width: 62ch; font-size: 13px; }
+
+  .clockstack { text-align: right; display: grid; gap: 2px; }
+  .clockstack .big { font-family: var(--f-data); font-size: 15px; font-weight: 500; }
+
+  /* ============================================================ BADGES / PILLS */
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: .07em;
+    text-transform: uppercase;
+    padding: 2.5px 8px;
+    border-radius: 100px;
+    border: 1px solid;
+    white-space: nowrap;
+  }
+  .pill .dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; flex: none; }
+
+  .pill.up    { color: var(--up);    border-color: var(--up);    background: var(--up-wash); }
+  .pill.down  { color: var(--down);  border-color: var(--down);  background: var(--down-wash); }
+  .pill.act   { color: var(--brass); border-color: var(--brass); background: var(--brass-wash); }
+  .pill.live  { color: var(--wire);  border-color: var(--wire);  background: var(--wire-wash); }
+  .pill.off   { color: var(--muted); border-color: var(--line);  background: var(--panel-2); }
+
+  /* ============================================================ STATUS RAIL */
+  .rail {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(158px, 1fr));
+    gap: 1px;
+    background: var(--line-soft);
+    border: 1px solid var(--line);
+    border-radius: var(--r-md);
+    overflow: hidden;
+    margin-top: 22px;
+  }
+
+  .rail > div { background: var(--panel); padding: 12px 14px 13px; display: grid; gap: 3px; align-content: start; }
+
+  .rail .val { font-family: var(--f-data); font-size: 17px; font-weight: 500; letter-spacing: -.01em; }
+  .rail .sub { font-size: 11.5px; color: var(--muted); }
+
+  .rail .spot { grid-column: span 2; }
+  @media (max-width: 640px) { .rail .spot { grid-column: span 1; } }
+  .rail .spot .val { font-size: 26px; }
+
+  /* ============================================================ BANNER */
+  .banner {
+    display: flex;
+    gap: 14px;
+    align-items: flex-start;
+    margin-top: 18px;
+    padding: 14px 16px;
+    border: 1px solid var(--brass);
+    border-left-width: 3px;
+    border-radius: var(--r-md);
+    background: var(--brass-wash);
+  }
+  .banner.blocked { border-color: var(--down); background: var(--down-wash); }
+  .banner h3 { font-size: 13.5px; font-weight: 600; letter-spacing: -.01em; }
+  .banner h3 .who { color: var(--brass); }
+  .banner.blocked h3 .who { color: var(--down); }
+  .banner p { margin: 4px 0 0; font-size: 12.5px; color: var(--text-2); max-width: 88ch; }
+  .banner .mark {
+    font-family: var(--f-data);
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--brass);
+    border: 1px solid var(--brass);
+    border-radius: var(--r-sm);
+    padding: 2px 7px;
+    flex: none;
+    margin-top: 1px;
+  }
+  .banner.blocked .mark { color: var(--down); border-color: var(--down); }
+
+  /* ============================================================ SECTIONS */
+  section { margin-top: 46px; }
+
+  .sec-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 10px 14px;
+    padding-bottom: 11px;
+    border-bottom: 1px solid var(--line);
+    margin-bottom: 20px;
+  }
+  .sec-head h2 { font-size: 17px; font-weight: 600; letter-spacing: -.015em; }
+  .sec-head .cite {
+    font-family: var(--f-data);
+    font-size: 11px;
+    color: var(--faint);
+    border-left: 1px solid var(--line);
+    padding-left: 12px;
+  }
+  .sec-head .note { margin-left: auto; font-size: 12px; color: var(--muted); }
+
+  /* ============================================================ CONTROLS */
+  .controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 22px 30px;
+    align-items: flex-start;
+    padding: 16px 18px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--r-md);
+    box-shadow: var(--shadow);
+  }
+  .ctl { display: grid; gap: 7px; }
+
+  .seg { display: flex; border: 1px solid var(--line); border-radius: var(--r-md); overflow: hidden; }
+  .seg button {
+    font-family: var(--f-body);
+    font-size: 11.5px;
+    font-weight: 600;
+    letter-spacing: .05em;
+    text-transform: uppercase;
+    color: var(--muted);
+    background: var(--panel-2);
+    border: 0;
+    border-right: 1px solid var(--line);
+    padding: 7px 13px;
+    cursor: pointer;
+  }
+  .seg button:last-child { border-right: 0; }
+  .seg button[aria-pressed="true"] { background: var(--brass); color: var(--ground); }
+  .seg button:hover:not([aria-pressed="true"]) { color: var(--text); background: var(--sunk); }
+
+  .switch {
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+    cursor: pointer;
+    user-select: none;
+    font-size: 12.5px;
+    color: var(--text-2);
+  }
+  .switch .track {
+    width: 38px; height: 21px;
+    border-radius: 100px;
+    background: var(--sunk);
+    border: 1px solid var(--line);
+    position: relative;
+    transition: background .16s ease, border-color .16s ease;
+    flex: none;
+  }
+  .switch .track::after {
+    content: "";
+    position: absolute;
+    inset: 2px auto 2px 2px;
+    width: 15px;
+    border-radius: 50%;
+    background: var(--muted);
+    transition: transform .16s ease, background .16s ease;
+  }
+  .switch input { position: absolute; opacity: 0; width: 0; height: 0; }
+  .switch input:checked + .track { background: var(--brass-wash); border-color: var(--brass); }
+  .switch input:checked + .track::after { transform: translateX(17px); background: var(--brass); }
+  .switch input:focus-visible + .track { outline: 2px solid var(--brass); outline-offset: 2px; }
+  .switch.danger input:checked + .track { background: var(--down-wash); border-color: var(--down); }
+  .switch.danger input:checked + .track::after { background: var(--down); }
+
+  .ctl-note { font-size: 11.5px; color: var(--muted); max-width: 34ch; }
+
+  /* ============================================================ COVERAGE MATRIX */
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 20px;
+    margin-bottom: 14px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .legend span { display: inline-flex; align-items: center; gap: 7px; }
+
+  .cov {
+    width: 11px; height: 11px;
+    border-radius: 50%;
+    flex: none;
+    display: inline-block;
+  }
+  .cov.full { background: var(--up); }
+  .cov.calc { background: transparent; border: 1.5px solid var(--brass); position: relative; overflow: hidden; }
+  .cov.calc::after { content: ""; position: absolute; inset: 0 50% 0 0; background: var(--brass); }
+  .cov.none { background: transparent; border: 1.5px solid var(--line); }
+
+  .tablewrap {
+    overflow-x: auto;
+    border: 1px solid var(--line);
+    border-radius: var(--r-md);
+    background: var(--panel);
+    box-shadow: var(--shadow);
+  }
+
+  table.grid { width: 100%; border-collapse: collapse; min-width: 940px; }
+
+  table.grid thead th {
+    text-align: left;
+    font-family: var(--f-body);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: .09em;
+    text-transform: uppercase;
+    color: var(--faint);
+    padding: 11px 12px;
+    border-bottom: 1px solid var(--line);
+    background: var(--panel-2);
+    white-space: nowrap;
+    position: sticky;
+    top: 0;
+  }
+  table.grid thead th.c { text-align: center; }
+
+  table.grid td { padding: 11px 12px; border-bottom: 1px solid var(--line-soft); vertical-align: middle; }
+  table.grid tbody tr:last-child td { border-bottom: 0; }
+  table.grid td.c { text-align: center; }
+  table.grid tbody tr.prov:hover { background: var(--panel-2); }
+
+  .provname { display: grid; gap: 1px; }
+  .provname b { font-weight: 600; font-size: 13px; letter-spacing: -.005em; }
+  .provname span { font-size: 11.5px; color: var(--muted); }
+
+  .disclose {
+    font-family: var(--f-data);
+    font-size: 15px;
+    line-height: 1;
+    color: var(--faint);
+    background: none;
+    border: 1px solid var(--line);
+    border-radius: var(--r-sm);
+    width: 22px; height: 22px;
+    cursor: pointer;
+    padding: 0;
+  }
+  .disclose:hover { color: var(--text); border-color: var(--muted); }
+
+  .tokenlife { font-family: var(--f-data); font-size: 11.5px; }
+  .tokenlife.short { color: var(--down); }
+  .tokenlife.long { color: var(--up); }
+  .tokenlife.none { color: var(--muted); }
+
+  tr.detail > td { padding: 0; border-bottom: 1px solid var(--line-soft); background: var(--sunk); }
+  tr.detail[hidden] { display: none; }
+
+  .detailbody {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 18px 28px;
+    padding: 16px 14px 18px 46px;
+  }
+  .detailbody h4 { font-size: 11px; font-weight: 600; letter-spacing: .09em; text-transform: uppercase; color: var(--faint); margin-bottom: 8px; }
+
+  .fields { display: grid; gap: 5px; }
+  .fields code {
+    font-family: var(--f-data);
+    font-size: 11.5px;
+    color: var(--text-2);
+    background: var(--panel);
+    border: 1px solid var(--line-soft);
+    border-radius: var(--r-sm);
+    padding: 3px 7px;
+  }
+  .detailbody p { margin: 0; font-size: 12.5px; color: var(--text-2); }
+  .detailbody p + p { margin-top: 7px; }
+  .detailbody .impl {
+    font-family: var(--f-data);
+    font-size: 11.5px;
+    color: var(--brass-ink);
+  }
+
+  /* ============================================================ CARDS */
+  .cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(272px, 1fr));
+    gap: 14px;
+  }
+
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--r-md);
+    padding: 15px 16px 16px;
+    display: grid;
+    gap: 12px;
+    align-content: start;
+    box-shadow: var(--shadow);
+  }
+
+  .card > header { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+  .card > header h3 { font-size: 13.5px; font-weight: 600; letter-spacing: -.008em; }
+
+  .headline { display: flex; align-items: baseline; gap: 9px; flex-wrap: wrap; }
+  .headline .figure {
+    font-family: var(--f-data);
+    font-size: 25px;
+    font-weight: 500;
+    letter-spacing: -.02em;
+    line-height: 1;
+    white-space: nowrap;
+  }
+  .headline .unit { font-size: 11.5px; color: var(--muted); line-height: 1.35; }
+
+  /* ============================================================ METERS
+     Two forms. Unsigned = magnitude, single cyan hue, filled from
+     the left. Signed = polarity, diverging from a centre baseline,
+     so direction is carried by position and the sign in the label —
+     not by hue alone. Every row is direct-labelled; there is no
+     colour-only reading anywhere.                                  */
+  .meters { display: grid; gap: 7px; }
+
+  .meter { display: grid; grid-template-columns: 1fr 92px 46px; align-items: center; gap: 10px; }
+  .meter > .name { font-size: 12px; color: var(--text-2); }
+  .meter > .value { font-family: var(--f-data); font-size: 12px; text-align: right; color: var(--text); }
+
+  .track-u { height: 6px; background: var(--sunk); border-radius: 2px; overflow: hidden; }
+  .track-u > i { display: block; height: 100%; background: var(--wire); border-radius: 0 2px 2px 0; }
+
+  .track-s { height: 6px; background: var(--sunk); border-radius: 2px; position: relative; }
+  .track-s::before {
+    content: "";
+    position: absolute;
+    left: 50%; top: -2px; bottom: -2px;
+    width: 1px;
+    background: var(--line);
+  }
+  .track-s > i { position: absolute; top: 0; bottom: 0; }
+  .track-s > i.pos { left: 50%; background: var(--up); border-radius: 0 2px 2px 0; }
+  .track-s > i.neg { right: 50%; background: var(--down); border-radius: 2px 0 0 2px; }
+
+  .evi { margin: 0; padding: 0; list-style: none; display: grid; gap: 5px; }
+  .evi li {
+    font-size: 12px;
+    color: var(--text-2);
+    padding-left: 13px;
+    position: relative;
+    line-height: 1.45;
+  }
+  .evi li::before {
+    content: "";
+    position: absolute;
+    left: 2px; top: 8px;
+    width: 4px; height: 1px;
+    background: var(--faint);
+  }
+  .evi.warn li::before { background: var(--down); width: 5px; height: 5px; border-radius: 50%; top: 6px; left: 1px; }
+  .evi.ok li::before { background: var(--up); width: 5px; height: 5px; border-radius: 50%; top: 6px; left: 1px; }
+
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; font-size: 12px; }
+  .kv dt { color: var(--muted); }
+  .kv dd { margin: 0; font-family: var(--f-data); text-align: right; }
+
+  /* ============================================================ CHAIN FLOW */
+  .flow { display: grid; gap: 14px; }
+
+  .stage {
+    display: grid;
+    grid-template-columns: 128px 1fr;
+    gap: 18px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--r-md);
+    padding: 15px 17px;
+    box-shadow: var(--shadow);
+  }
+  @media (max-width: 720px) { .stage { grid-template-columns: 1fr; gap: 10px; } }
+
+  .stage > .tag { display: grid; gap: 4px; align-content: start; }
+  .stage > .tag b { font-family: var(--f-display); font-size: 12.5px; font-weight: 600; }
+  .stage > .tag span { font-family: var(--f-data); font-size: 10.5px; color: var(--faint); }
+  .stage > .body { display: grid; gap: 11px; min-width: 0; }
+
+  .scen {
+    display: grid;
+    gap: 8px;
+    padding: 12px 13px;
+    border: 1px solid var(--line);
+    border-radius: var(--r-md);
+    background: var(--panel-2);
+  }
+  .scen.lead { border-left: 3px solid var(--up); }
+  .scen.aside { border-left: 3px solid var(--line); }
+  .scen > header { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .scen > header b { font-size: 13px; font-weight: 600; }
+  .scen > header .score { font-family: var(--f-data); font-size: 13px; margin-left: auto; }
+  .scen .split { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px 24px; }
+
+  .gates { display: grid; gap: 6px; }
+  .gate {
+    display: grid;
+    grid-template-columns: 20px 1fr auto;
+    gap: 10px;
+    align-items: baseline;
+    font-size: 12.5px;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--line-soft);
+  }
+  .gate:last-child { border-bottom: 0; }
+  .gate .mk { font-family: var(--f-data); font-size: 12px; font-weight: 600; text-align: center; }
+  .gate.pass .mk { color: var(--up); }
+  .gate.fail .mk { color: var(--down); }
+  .gate .why { font-family: var(--f-data); font-size: 11.5px; color: var(--muted); text-align: right; }
+
+  /* ============================================================ CONTRACT LADDER */
+  .legs { display: flex; flex-wrap: wrap; gap: 6px; }
+  .leg {
+    font-family: var(--f-data);
+    font-size: 11.5px;
+    padding: 3px 8px;
+    border-radius: var(--r-sm);
+    border: 1px solid;
+  }
+  .leg.sell { color: var(--down); border-color: var(--down); background: var(--down-wash); }
+  .leg.buy  { color: var(--up);   border-color: var(--up);   background: var(--up-wash); }
+
+  .chosen { border-left: 3px solid var(--brass); }
+
+  /* ============================================================ GATE GRID */
+  .checkgrid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(214px, 1fr));
+    gap: 1px;
+    background: var(--line-soft);
+    border: 1px solid var(--line);
+    border-radius: var(--r-md);
+    overflow: hidden;
+  }
+  .checkgrid > div {
+    background: var(--panel);
+    padding: 10px 12px;
+    display: grid;
+    grid-template-columns: 16px 1fr;
+    gap: 9px;
+    align-items: baseline;
+  }
+  .checkgrid .mk { font-family: var(--f-data); font-size: 11.5px; font-weight: 600; text-align: center; }
+  .checkgrid .n { font-size: 12.5px; }
+  .checkgrid .n small { display: block; color: var(--faint); font-size: 11px; font-family: var(--f-data); }
+  .checkgrid .ok .mk { color: var(--up); }
+  .checkgrid .no .mk { color: var(--brass); }
+
+  /* ============================================================ FAILURE TABLE */
+  .fail-table { width: 100%; border-collapse: collapse; }
+  .fail-table th, .fail-table td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line-soft); font-size: 12.5px; }
+  .fail-table th { font-size: 10px; letter-spacing: .09em; text-transform: uppercase; color: var(--faint); font-weight: 600; background: var(--panel-2); }
+  .fail-table td.act { font-family: var(--f-data); font-size: 11.5px; color: var(--down); white-space: nowrap; }
+  .fail-table td.act.soft { color: var(--wire); }
+  .fail-table tbody tr:last-child td { border-bottom: 0; }
+
+  /* ============================================================ FOOTER */
+  footer.page {
+    margin-top: 52px;
+    padding-top: 20px;
+    border-top: 1px solid var(--line);
+    display: grid;
+    gap: 12px;
+    font-size: 12.5px;
+    color: var(--muted);
+  }
+  footer.page .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 18px 30px; }
+  footer.page b { color: var(--text-2); font-weight: 600; }
+  footer.page code { font-family: var(--f-data); font-size: 11.5px; }
+</style>
+
+<div class="shell">
+
+  <!-- ============================================================ MASTHEAD -->
+  <header class="masthead">
+    <div>
+      <div class="wordmark">
+        <h1>Index Brain Console</h1>
+        <span class="glyph">LLM&nbsp;OFF</span>
+      </div>
+      <p>
+        Operations surface for the deterministic NIFTY / BANKNIFTY options engine.
+        Connect feeds, set the safety switches, and read what the quantitative brain
+        currently concludes — and why it is not yet allowed to act on it.
+      </p>
+    </div>
+    <div class="clockstack">
+      <span class="lab">As of · IST</span>
+      <span class="big">04 Sep 2026 &nbsp;11:30:00</span>
+      <span class="pill live"><span class="dot"></span>Simulated state · seed 7</span>
+    </div>
+  </header>
+
+  <!-- ============================================================ STATUS RAIL -->
+  <div class="rail">
+    <div class="spot">
+      <span class="lab">NIFTY 50 · spot</span>
+      <span class="val">24,859.09</span>
+      <span class="sub">
+        <span class="num" style="color:var(--up)">+359.09 &nbsp;+1.47%</span>
+        &nbsp;· prev close 24,500.00
+      </span>
+    </div>
+    <div>
+      <span class="lab">Session</span>
+      <span class="val">ACTIVE</span>
+      <span class="sub">09:15–15:30 IST</span>
+    </div>
+    <div>
+      <span class="lab">Run mode</span>
+      <span class="val" id="mode-readout">PAPER</span>
+      <span class="sub">no broker attached</span>
+    </div>
+    <div>
+      <span class="lab">Weekly expiry</span>
+      <span class="val">10 Sep</span>
+      <span class="sub">6.17 days · lot 75</span>
+    </div>
+    <div>
+      <span class="lab">India VIX</span>
+      <span class="val">14.71</span>
+      <span class="sub"><span class="num" style="color:var(--up)">+5.4%</span> on session</span>
+    </div>
+    <div>
+      <span class="lab">Open positions</span>
+      <span class="val">0</span>
+      <span class="sub">₹0 unrealised</span>
+    </div>
+  </div>
+
+  <!-- ============================================================ BANNER -->
+  <div class="banner" id="banner">
+    <span class="mark" id="banner-mark">ACT</span>
+    <div>
+      <h3><span class="who">Execution is disabled.</span> The brain analyses; it cannot trade.</h3>
+      <p id="banner-body">
+        The Risk Engine and Execution Gate are interfaces without implementations, so no
+        <code class="mono">TradeDecision</code> can be constructed — a decision requires a
+        <code class="mono">RiskDecision</code>, and the engine will not fabricate one. Ranked
+        contracts below survived <em>analysis</em> only. Nothing is authorised.
+      </p>
+    </div>
+  </div>
+
+  <!-- ============================================================ CONTROLS -->
+  <section>
+    <div class="sec-head">
+      <h2>Operating controls</h2>
+      <span class="cite">spec §22 · §23 · §29</span>
+      <span class="note">Kill switch and run mode gate every order at the Execution Gate.</span>
+    </div>
+
+    <div class="controls">
+      <div class="ctl">
+        <span class="lab">Run mode</span>
+        <div class="seg" role="group" aria-label="Run mode">
+          <button type="button" data-mode="LIVE" aria-pressed="false">Live</button>
+          <button type="button" data-mode="PAPER" aria-pressed="true">Paper</button>
+          <button type="button" data-mode="BACKTEST" aria-pressed="false">Backtest</button>
+          <button type="button" data-mode="REPLAY" aria-pressed="false">Replay</button>
+        </div>
+        <p class="ctl-note" id="mode-note">
+          Paper trading: the full brain runs, orders stop at a simulated broker.
+        </p>
+      </div>
+
+      <div class="ctl">
+        <span class="lab">Intelligence layer</span>
+        <label class="switch">
+          <input type="checkbox" id="llm-toggle">
+          <span class="track"></span>
+          <span id="llm-label">LLM disabled · DeterministicProvider</span>
+        </label>
+        <p class="ctl-note" id="llm-note">
+          The engine is fully functional here. The agent may investigate; it can never
+          override risk, the gate, or the kill switch.
+        </p>
+      </div>
+
+      <div class="ctl">
+        <span class="lab">Kill switch</span>
+        <label class="switch danger">
+          <input type="checkbox" id="kill-toggle">
+          <span class="track"></span>
+          <span id="kill-label">Disarmed</span>
+        </label>
+        <p class="ctl-note">
+          Arming it fails the <code class="mono">kill_switch</code> check for every order,
+          immediately and without exception.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ CONNECTIONS -->
+  <section>
+    <div class="sec-head">
+      <h2>Connections</h2>
+      <span class="cite">spec §2 · provider-agnostic adapters</span>
+      <span class="note">One data layer may be composed from several partial providers.</span>
+    </div>
+
+    <div class="legend">
+      <span><i class="cov full"></i> Served by the API</span>
+      <span><i class="cov calc"></i> Derived locally from what the API gives</span>
+      <span><i class="cov none"></i> Not available</span>
+      <span style="color:var(--muted)">·</span>
+      <span><b class="tokenlife short">Daily</b> token needs a re-login each morning</span>
+      <span><b class="tokenlife long">30 d</b> survives unattended running</span>
+    </div>
+
+    <div class="tablewrap">
+      <table class="grid">
+        <thead>
+          <tr>
+            <th style="width:30px"></th>
+            <th>Provider</th>
+            <th class="c">Index</th>
+            <th class="c">Bars</th>
+            <th class="c">Chain</th>
+            <th class="c">Greeks</th>
+            <th class="c">OI</th>
+            <th class="c">Orders</th>
+            <th class="c">Margin</th>
+            <th>Token life</th>
+            <th>Access</th>
+            <th>In this build</th>
+          </tr>
+        </thead>
+        <tbody id="provider-rows"></tbody>
+      </table>
+    </div>
+
+    <div class="cards" style="margin-top:14px">
+      <div class="card">
+        <header><h3>Why the Greeks column is empty</h3></header>
+        <p style="margin:0;font-size:12.5px;color:var(--text-2)">
+          No Indian broker API returns Greeks. NSE's chain endpoint publishes implied
+          volatility but no sensitivities. So delta, gamma, theta and vega are computed
+          in-process from the premium and IV — which is why the Strike Engine can rank on
+          delta fit at all, and why a provider that drops IV degrades ranking rather than
+          breaking it.
+        </p>
+      </div>
+      <div class="card">
+        <header><h3>Token life is an architectural constraint</h3></header>
+        <p style="margin:0;font-size:12.5px;color:var(--text-2)">
+          Most Indian broker tokens expire at the next login window, which an unattended
+          engine cannot survive without an automated TOTP flow. A long-lived token, or a
+          provider whose login can be scripted from a TOTP secret, is the difference between
+          a system that runs itself and one that needs someone at a keyboard by 09:00.
+        </p>
+      </div>
+      <div class="card">
+        <header><h3>Composing a data layer</h3></header>
+        <p style="margin:0;font-size:12.5px;color:var(--text-2)">
+          The adapter interfaces are split by capability, not by vendor, so a working layer
+          can be a paid feed for ticks, a broker for orders and margin, and NSE for the
+          chain. Splitting them is also what lets the failure contract degrade precisely:
+          an incomplete chain blocks options entry without stopping everything else.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ DECISION CHAIN -->
+  <section>
+    <div class="sec-head">
+      <h2>Analysis</h2>
+      <span class="cite">spec §5–§8</span>
+      <span class="note">Four brains read the same MarketState and return evidence, never orders.</span>
+    </div>
+
+    <div class="cards">
+
+      <!-- INDEX -->
+      <div class="card">
+        <header>
+          <h3>Index</h3>
+          <span class="pill up"><span class="dot"></span>Bullish</span>
+        </header>
+        <div class="headline">
+          <span class="figure" style="color:var(--up)">+0.91</span>
+          <span class="unit">composite · confidence 0.94</span>
+        </div>
+        <div class="meters">
+          <div class="meter" title="Trend: EMA separation, price location, regression slope">
+            <span class="name">Trend</span>
+            <span class="track-s"><i class="pos" style="width:43.5%"></i></span>
+            <span class="value">+0.87</span>
+          </div>
+          <div class="meter" title="Swing structure: higher highs and higher lows on daily pivots">
+            <span class="name">Structure</span>
+            <span class="track-s"><i class="pos" style="width:50%"></i></span>
+            <span class="value">+1.00</span>
+          </div>
+          <div class="meter" title="Momentum: rate of change, RSI, intraday slope">
+            <span class="name">Momentum</span>
+            <span class="track-s"><i class="pos" style="width:43.5%"></i></span>
+            <span class="value">+0.87</span>
+          </div>
+          <div class="meter" title="ATR percentile against its own history — a magnitude, not a direction">
+            <span class="name">Volatility</span>
+            <span class="track-u"><i style="width:96%"></i></span>
+            <span class="value">0.96</span>
+          </div>
+        </div>
+        <dl class="kv">
+          <dt>Breakout state</dt><dd style="color:var(--up)">BREAKOUT</dd>
+          <dt>VWAP</dt><dd>+0.47 ATR above</dd>
+          <dt>ATR(14)</dt><dd>338.15</dd>
+          <dt>Day range position</dt><dd>0.97</dd>
+          <dt>Nearest support</dt><dd>24,521.83</dd>
+          <dt>Resistance</dt><dd>none in range</dd>
+        </dl>
+        <ul class="evi">
+          <li>EMA20 is +6.05% vs EMA50</li>
+          <li>20-bar regression slope +87.35 pts/bar</li>
+          <li>RSI(14) at 84.0</li>
+          <li>ATR(14) at the 96th percentile of its own history</li>
+        </ul>
+        <div>
+          <span class="lab" style="display:block;margin-bottom:6px">Invalidated by</span>
+          <ul class="evi warn">
+            <li>Sustained trade below 24,521.83</li>
+            <li>Loss of VWAP at 24,700.17</li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- CONSTITUENTS -->
+      <div class="card">
+        <header>
+          <h3>Constituents</h3>
+          <span class="pill up"><span class="dot"></span>Broad</span>
+        </header>
+        <div class="headline">
+          <span class="figure" style="color:var(--up)">10&thinsp;–&thinsp;0</span>
+          <span class="unit">advance–decline · confidence 0.97</span>
+        </div>
+        <div class="meters">
+          <div class="meter" title="Advance-decline breadth, squashed to -1..+1">
+            <span class="name">Breadth</span>
+            <span class="track-s"><i class="pos" style="width:46.5%"></i></span>
+            <span class="value">+0.93</span>
+          </div>
+          <div class="meter" title="Do constituents confirm the index's own move? Discounted by concentration">
+            <span class="name">Participation</span>
+            <span class="track-u"><i style="width:98%"></i></span>
+            <span class="value">0.98</span>
+          </div>
+          <div class="meter" title="How much of the total move the largest three names own — 1.00 means one name did everything">
+            <span class="name">Concentration</span>
+            <span class="track-u"><i style="width:4%"></i></span>
+            <span class="value">0.04</span>
+          </div>
+        </div>
+        <div>
+          <span class="lab" style="display:block;margin-bottom:7px">Index points contributed</span>
+          <div class="meters" id="contrib-meters"></div>
+        </div>
+        <div>
+          <span class="lab" style="display:block;margin-bottom:7px">Sector scores</span>
+          <div class="meters" id="sector-meters"></div>
+        </div>
+        <ul class="evi">
+          <li>Weight-adjusted move of observed constituents: +1.18%</li>
+          <li>Top 3 movers account for 54% of the move</li>
+          <li>Weight coverage 100% of the index</li>
+        </ul>
+      </div>
+
+      <!-- OPTIONS -->
+      <div class="card">
+        <header>
+          <h3>Options</h3>
+          <span class="pill live"><span class="dot"></span>Chain complete</span>
+        </header>
+        <div class="headline">
+          <span class="figure">24,850</span>
+          <span class="unit">ATM strike · confidence 0.93</span>
+        </div>
+        <div class="meters">
+          <div class="meter" title="Net proximity-weighted OI change. Positive leans supportive — but OI alone never authorises a direction">
+            <span class="name">OI structure</span>
+            <span class="track-s"><i class="pos" style="width:1.5%"></i></span>
+            <span class="value">+0.03</span>
+          </div>
+          <div class="meter" title="Put-minus-call IV skew, reported as surface shape — negative means downside protection is bid">
+            <span class="name">Skew (shape)</span>
+            <span class="track-s"><i class="neg" style="width:18%"></i></span>
+            <span class="value">−0.36</span>
+          </div>
+          <div class="meter" title="Median relative bid-ask spread across the ATM window">
+            <span class="name">Liquidity</span>
+            <span class="track-u"><i style="width:89%"></i></span>
+            <span class="value">0.89</span>
+          </div>
+        </div>
+        <dl class="kv">
+          <dt>Put / call OI</dt><dd>1.05</dd>
+          <dt>Put / call volume</dt><dd>0.73</dd>
+          <dt>ATM IV</dt><dd>14.02%</dd>
+          <dt>Put−call skew</dt><dd>+1.12 pts</dd>
+          <dt>Median spread</dt><dd>0.55%</dd>
+          <dt>Max pain</dt><dd>24,900</dd>
+        </dl>
+        <div>
+          <span class="lab" style="display:block;margin-bottom:6px">Structure</span>
+          <dl class="kv">
+            <dt>Call walls</dt><dd>25,000 · 24,950 · 24,900</dd>
+            <dt>Put walls</dt><dd>24,500 · 24,800 · 24,850</dd>
+            <dt>Gamma zones</dt><dd>25,000 · 24,800 · 24,900</dd>
+          </dl>
+        </div>
+        <ul class="evi">
+          <li>ATM-window OI change: calls −8,925, puts +33,261 (proximity weighted)</li>
+          <li>Positioning is supportive, but OI alone does not authorise direction</li>
+        </ul>
+      </div>
+
+      <!-- VOLATILITY -->
+      <div class="card">
+        <header>
+          <h3>Volatility</h3>
+          <span class="pill act"><span class="dot"></span>Premium rich</span>
+        </header>
+        <div class="headline">
+          <span class="figure" style="color:var(--brass)">1.24×</span>
+          <span class="unit">IV / realised · confidence 1.00</span>
+        </div>
+        <div class="meters">
+          <div class="meter" title="Where ATM IV sits in its own 41-observation history">
+            <span class="name">IV percentile</span>
+            <span class="track-u"><i style="width:61%"></i></span>
+            <span class="value">0.61</span>
+          </div>
+          <div class="meter" title="Richness: implied against realised. Positive favours collecting premium">
+            <span class="name">Richness</span>
+            <span class="track-s"><i class="pos" style="width:29.5%"></i></span>
+            <span class="value">+0.59</span>
+          </div>
+          <div class="meter" title="Is volatility being bid up or bled out right now?">
+            <span class="name">Expansion</span>
+            <span class="track-s"><i class="pos" style="width:8.5%"></i></span>
+            <span class="value">+0.17</span>
+          </div>
+        </div>
+        <dl class="kv">
+          <dt>Regime</dt><dd>ELEVATED</dd>
+          <dt>ATM IV</dt><dd>14.02%</dd>
+          <dt>Realised (252d)</dt><dd>11.35%</dd>
+          <dt>Expected move (1σ)</dt><dd>±453 pts</dd>
+          <dt>India VIX</dt><dd>14.71 (+5.4%)</dd>
+        </dl>
+        <ul class="evi">
+          <li>ATM IV 14.02% at the 61st percentile of 41 observations → ELEVATED</li>
+          <li>IV/RV 1.24 — premium looks rich, which favours credit structures</li>
+        </ul>
+        <p style="margin:0;font-size:12px;color:var(--muted)">
+          Elevated is not the same as expensive. Level and richness are separate
+          measurements because they answer separate questions.
+        </p>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ============================================================ DECISION FLOW -->
+  <section>
+    <div class="sec-head">
+      <h2>Decision chain</h2>
+      <span class="cite">spec §9–§13 · §33</span>
+      <span class="note">Each stage is folded back into the immutable MarketState it was read from.</span>
+    </div>
+
+    <div class="flow">
+
+      <!-- REGIME -->
+      <div class="stage">
+        <div class="tag">
+          <b>Regime</b>
+          <span>§9 · classify</span>
+        </div>
+        <div class="body">
+          <div style="display:flex;align-items:baseline;gap:11px;flex-wrap:wrap">
+            <span class="headline"><span class="figure" style="color:var(--up)">TREND_UP</span></span>
+            <span class="pill up"><span class="dot"></span>Confidence 0.95</span>
+          </div>
+          <div>
+            <span class="lab" style="display:block;margin-bottom:7px">Scored candidates — all twelve are scored, the leader is reported</span>
+            <div class="meters" id="regime-meters"></div>
+          </div>
+          <ul class="evi">
+            <li>Runner-up BREAKOUT scored 0.79 — compatible with the leader, so not treated as ambiguity</li>
+            <li>Volatility-level regimes are discounted while the structural read is strong</li>
+          </ul>
+          <div>
+            <span class="lab" style="display:block;margin-bottom:6px">Invalidated by</span>
+            <ul class="evi warn"><li>Acceptance below 24,521.83</li></ul>
+          </div>
+        </div>
+      </div>
+
+      <!-- SCENARIOS -->
+      <div class="stage">
+        <div class="tag">
+          <b>Scenarios</b>
+          <span>§10 · competing</span>
+        </div>
+        <div class="body">
+          <div class="scen lead">
+            <header>
+              <b>Bullish continuation</b>
+              <span class="pill up"><span class="dot"></span>Leading</span>
+              <span class="score" style="color:var(--up)">0.87</span>
+            </header>
+            <div class="split">
+              <div>
+                <span class="lab" style="display:block;margin-bottom:6px">Supported by</span>
+                <ul class="evi ok">
+                  <li>Index composite +0.91</li>
+                  <li>Breadth confirms — 10 advancing</li>
+                  <li>Regime is TREND_UP</li>
+                </ul>
+              </div>
+              <div>
+                <span class="lab" style="display:block;margin-bottom:6px">Argued against by</span>
+                <ul class="evi"><li style="color:var(--muted)">Nothing in the current state contradicts it</li></ul>
+                <span class="lab" style="display:block;margin:10px 0 6px">Invalidated by</span>
+                <ul class="evi warn">
+                  <li>Loss of 24,521.83</li>
+                  <li>Rejection at the 25,000 call wall</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+
+          <div class="scen aside">
+            <header>
+              <b>No trade</b>
+              <span class="pill off"><span class="dot"></span>Always scored</span>
+              <span class="score">0.09</span>
+            </header>
+            <p style="margin:0;font-size:12.5px;color:var(--text-2)">
+              Standing aside is a first-class scenario, not a fallback. It strengthens as the
+              case for anything else weakens — thin conviction, poor liquidity, an uncertain
+              regime — and here it is simply outscored.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <!-- SIGNAL -->
+      <div class="stage">
+        <div class="tag">
+          <b>Signal</b>
+          <span>§11 · four gates</span>
+        </div>
+        <div class="body">
+          <div style="display:flex;align-items:baseline;gap:11px;flex-wrap:wrap">
+            <span class="headline"><span class="figure" style="color:var(--up)">BULLISH</span></span>
+            <span class="pill up"><span class="dot"></span>Score 0.87</span>
+            <span class="pill off"><span class="dot"></span>No confirmation required</span>
+          </div>
+
+          <div>
+            <span class="lab" style="display:block;margin-bottom:7px">Domain votes — oriented so positive agrees with the proposed direction</span>
+            <div class="meters">
+              <div class="meter" title="Index brain composite, oriented to the proposed direction">
+                <span class="name">Index</span>
+                <span class="track-s"><i class="pos" style="width:45.5%"></i></span>
+                <span class="value">+0.91</span>
+              </div>
+              <div class="meter" title="Breadth score weighted by participation quality">
+                <span class="name">Breadth</span>
+                <span class="track-s"><i class="pos" style="width:46%"></i></span>
+                <span class="value">+0.92</span>
+              </div>
+              <div class="meter" title="Options positioning, deliberately weighted below the others">
+                <span class="name">Options positioning</span>
+                <span class="track-s"><i class="pos" style="width:1%"></i></span>
+                <span class="value">+0.02</span>
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <span class="lab" style="display:block;margin-bottom:6px">Gates</span>
+            <div class="gates">
+              <div class="gate pass">
+                <span class="mk">✓</span>
+                <span>Scenario separation over the best <em>opposing</em> case</span>
+                <span class="why">+0.78 &nbsp;min 0.12</span>
+              </div>
+              <div class="gate pass">
+                <span class="mk">✓</span>
+                <span>Cross-domain agreement</span>
+                <span class="why">1.00 &nbsp;min 0.45</span>
+              </div>
+              <div class="gate pass">
+                <span class="mk">✓</span>
+                <span>Primary domain participates — the index must itself vote</span>
+                <span class="why">+0.91 &nbsp;min 0.15</span>
+              </div>
+              <div class="gate pass">
+                <span class="mk">✓</span>
+                <span>Absolute conviction</span>
+                <span class="why">0.87 &nbsp;min 0.35</span>
+              </div>
+            </div>
+            <p style="margin:9px 0 0;font-size:12px;color:var(--muted)">
+              Two of three domains expressed a view. The third abstained rather than
+              disagreed — which is exactly why agreement alone is not sufficient: a lone
+              non-zero domain would otherwise score as unanimous, and open interest would be
+              able to authorise a trade by itself.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <!-- STRATEGY -->
+      <div class="stage">
+        <div class="tag">
+          <b>Strategy</b>
+          <span>§12 · expression</span>
+        </div>
+        <div class="body">
+          <p style="margin:0;font-size:12.5px;color:var(--text-2)">
+            Direction is settled; this stage picks how to express it. With premium rich at
+            1.24× realised, collecting it beats paying for it — the same bullish signal in a
+            cheap-volatility regime produces a long call instead.
+          </p>
+          <div class="tablewrap">
+            <table class="grid" style="min-width:640px">
+              <thead>
+                <tr>
+                  <th>Structure</th><th class="c">Score</th><th>Max loss</th><th>Max profit</th>
+                  <th>Breakeven</th><th>Why</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr class="chosen">
+                  <td><b>Put credit spread</b></td>
+                  <td class="c num" style="color:var(--up)">0.81</td>
+                  <td class="num">₹26,794</td>
+                  <td class="num">₹6,956</td>
+                  <td class="num">24,657</td>
+                  <td style="font-size:12px;color:var(--text-2)">IV rich — collect premium rather than pay it</td>
+                </tr>
+                <tr>
+                  <td>Call debit spread</td>
+                  <td class="c num">0.69</td>
+                  <td class="num">₹12,038</td>
+                  <td class="num">₹21,713</td>
+                  <td class="num">25,011</td>
+                  <td style="font-size:12px;color:var(--text-2)">Defined-risk directional alternative</td>
+                </tr>
+                <tr>
+                  <td>No trade</td>
+                  <td class="c num">0.00</td>
+                  <td class="num">₹0</td>
+                  <td class="num">—</td>
+                  <td class="num">—</td>
+                  <td style="font-size:12px;color:var(--text-2)">Outranks anything below the 0.45 acceptance floor</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- STRIKES -->
+      <div class="stage">
+        <div class="tag">
+          <b>Contracts</b>
+          <span>§13 · ranked</span>
+        </div>
+        <div class="body">
+          <p style="margin:0;font-size:12.5px;color:var(--text-2)">
+            Every placement of the chosen structure was priced from live quotes — buys at the
+            ask, sells at the bid — then filtered on spread, open interest and two-sidedness
+            before being scored. Five survived.
+          </p>
+          <div class="tablewrap">
+            <table class="grid" style="min-width:800px">
+              <thead>
+                <tr>
+                  <th class="c">Score</th><th>Legs</th><th>Credit</th><th>Max loss</th>
+                  <th>Breakeven</th><th class="c">R:R</th><th class="c">Δ</th><th class="c">Spread</th>
+                </tr>
+              </thead>
+              <tbody id="strike-rows"></tbody>
+            </table>
+          </div>
+          <p style="margin:0;font-size:12px;color:var(--muted)">
+            Reward-to-risk below 1 is normal for credit spreads — they are designed to win
+            often rather than large, which is why raw R:R is a scoring input and never a
+            filter.
+          </p>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ============================================================ EXECUTION GATE -->
+  <section>
+    <div class="sec-head">
+      <h2>Execution gate</h2>
+      <span class="cite">spec §16 · all sixteen are mandatory</span>
+      <span class="note">If any mandatory check fails: no order. There is no override path.</span>
+    </div>
+
+    <div class="checkgrid" id="gate-grid"></div>
+
+    <div class="banner blocked" style="margin-top:16px">
+      <span class="mark">HALT</span>
+      <div>
+        <h3><span class="who">Six checks cannot be evaluated.</span> The gate therefore returns no order.</h3>
+        <p>
+          Risk approval, margin, the daily loss limit, position limits, duplicate-order
+          detection and the kill-switch read all require the Risk Engine and Order Manager,
+          which are interfaces without implementations. The gate is doing exactly what it
+          should: an unevaluable mandatory check is a failed check.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ FAILURE CONTRACT -->
+  <section>
+    <div class="sec-head">
+      <h2>Failure contract</h2>
+      <span class="cite">spec §29</span>
+      <span class="note">Every failure domain resolves to exactly one safe action.</span>
+    </div>
+
+    <div class="tablewrap">
+      <table class="fail-table">
+        <thead>
+          <tr><th style="width:34%">If this fails</th><th style="width:30%">The system does</th><th>Because</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Market data goes stale</td>
+            <td class="act">NO_NEW_TRADES</td>
+            <td>A decision priced on a stale book is a decision about a market that no longer exists.</td>
+          </tr>
+          <tr>
+            <td>Broker connection drops</td>
+            <td class="act">NO_NEW_TRADES + RECONCILE</td>
+            <td>Existing positions must be re-established before anything new is added to them.</td>
+          </tr>
+          <tr>
+            <td>Option chain is incomplete</td>
+            <td class="act">NO_OPTIONS_ENTRY</td>
+            <td>Partial chains hide the walls and the liquidity that the structure was chosen on.</td>
+          </tr>
+          <tr>
+            <td>Risk engine errors</td>
+            <td class="act">NO_TRADE</td>
+            <td>Risk is authoritative; an unevaluable risk decision is a rejection.</td>
+          </tr>
+          <tr>
+            <td>LLM / agent errors</td>
+            <td class="act soft">CONTINUE_WITHOUT_LLM</td>
+            <td>The intelligence layer is optional by construction. Losing it changes nothing.</td>
+          </tr>
+          <tr>
+            <td>Redis is unavailable</td>
+            <td class="act">FAIL_SAFE</td>
+            <td>Working memory is a cache; serving stale state silently is worse than stopping.</td>
+          </tr>
+          <tr>
+            <td>Database is unavailable</td>
+            <td class="act">NO_NEW_TRADES</td>
+            <td>A trade that cannot be recorded cannot be reconstructed, reviewed, or learned from.</td>
+          </tr>
+          <tr>
+            <td>State reconciliation fails</td>
+            <td class="act">NO_NEW_ORDERS</td>
+            <td>If our position and the broker's disagree, every size calculation is wrong.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============================================================ FOOTER -->
+  <footer class="page">
+    <div class="cols">
+      <div>
+        <b>What these numbers are.</b> A real run of the implemented pipeline against
+        <code>SimulatorDataAdapter</code> at seed 7, 04 Sep 2026 11:30 IST — not illustrative
+        placeholders, and not live market data. The simulator prices its chain through
+        Black-Scholes so premiums and Greeks are mutually coherent.
+      </div>
+      <div>
+        <b>What is implemented.</b> Contracts, adapter interfaces, the market-state engine,
+        all nine brains, the position brain, and the analysis pipeline through to ranked
+        contracts.
+      </div>
+      <div>
+        <b>What is not.</b> The Risk Engine, Execution Gate, Order Manager, every live broker
+        adapter, the event/trigger engine, persistence, and the backtest driver. Coverage in
+        the connections table describes each provider's published API surface — verify it
+        against current documentation before depending on it.
+      </div>
+    </div>
+  </footer>
+
+</div>
+
+<script>
+  "use strict";
+
+  /* ------------------------------------------------------------ DATA
+     Provider coverage. `cov` is index, bars, chain, greeks, OI, orders,
+     margin — 1 served, 0.5 derived locally, 0 unavailable.            */
+  const PROVIDERS = [
+    {
+      name: "Zerodha Kite Connect", kind: "Broker · API v3",
+      cov: [1, 1, 1, .5, 1, 1, 1], life: "Daily", lifeClass: "short", access: "Paid",
+      fields: ["KITE_API_KEY", "KITE_API_SECRET", "KITE_REQUEST_TOKEN", "KITE_ACCESS_TOKEN"],
+      impl: "data/adapters/zerodha.py",
+      notes: [
+        "Largest retail broker; the most widely documented Python client. Historical bars are a separate paid add-on.",
+        "The access token is exchanged from a request token after an interactive login and expires each morning, so unattended running needs a scripted TOTP flow."
+      ]
+    },
+    {
+      name: "Dhan HQ", kind: "Broker · API v2",
+      cov: [1, 1, 1, .5, 1, 1, 1], life: "30 d", lifeClass: "long", access: "Free",
+      fields: ["DHAN_CLIENT_ID", "DHAN_ACCESS_TOKEN"],
+      impl: "data/adapters/dhan.py",
+      notes: [
+        "The long-lived token makes this the least painful option for an engine that must run without a person present.",
+        "Generate the token from the web console and store it; no daily exchange step."
+      ]
+    },
+    {
+      name: "Angel One SmartAPI", kind: "Broker · REST + WS",
+      cov: [1, 1, 1, .5, 1, 1, 1], life: "Daily", lifeClass: "short", access: "Free",
+      fields: ["ANGEL_API_KEY", "ANGEL_CLIENT_CODE", "ANGEL_MPIN", "ANGEL_TOTP_SECRET"],
+      impl: "data/adapters/angelone.py",
+      notes: [
+        "Login is fully scriptable from a stored TOTP secret, which makes the daily token practical to automate.",
+        "Free API access including historical candles."
+      ]
+    },
+    {
+      name: "Upstox", kind: "Broker · API v2",
+      cov: [1, 1, 1, .5, 1, 1, 1], life: "Daily", lifeClass: "short", access: "Free",
+      fields: ["UPSTOX_API_KEY", "UPSTOX_API_SECRET", "UPSTOX_REDIRECT_URI"],
+      impl: "data/adapters/upstox.py",
+      notes: [
+        "Standard OAuth authorisation-code flow against a registered redirect URI.",
+        "Publishes an option-chain endpoint, which saves assembling the chain from an instrument dump."
+      ]
+    },
+    {
+      name: "Fyers", kind: "Broker · API v3",
+      cov: [1, 1, 1, .5, 1, 1, 1], life: "Daily", lifeClass: "short", access: "Free",
+      fields: ["FYERS_APP_ID", "FYERS_SECRET_KEY", "FYERS_REDIRECT_URI", "FYERS_PIN"],
+      impl: "data/adapters/fyers.py",
+      notes: [
+        "Good websocket depth feed and a generous historical-candle window.",
+        "Token refresh is scriptable with the account PIN or a TOTP secret."
+      ]
+    },
+    {
+      name: "ICICI Direct Breeze", kind: "Broker · REST",
+      cov: [1, 1, 1, .5, 1, 1, 1], life: "Daily", lifeClass: "short", access: "Free",
+      fields: ["BREEZE_APP_KEY", "BREEZE_SECRET_KEY", "BREEZE_SESSION_TOKEN"],
+      impl: "data/adapters/breeze.py",
+      notes: [
+        "Session token comes from an interactive login redirect and must be refreshed daily.",
+        "Useful when the trading account already sits with ICICI."
+      ]
+    },
+    {
+      name: "Kotak Neo", kind: "Broker · REST",
+      cov: [1, 1, 1, .5, 1, 1, 1], life: "Daily", lifeClass: "short", access: "Free",
+      fields: ["KOTAK_CONSUMER_KEY", "KOTAK_CONSUMER_SECRET", "KOTAK_MOBILE", "KOTAK_MPIN"],
+      impl: "data/adapters/kotak.py",
+      notes: ["Two-step login: consumer credentials, then a mobile plus MPIN validation."]
+    },
+    {
+      name: "5paisa", kind: "Broker · REST",
+      cov: [1, 1, 1, .5, 1, 1, 1], life: "Daily", lifeClass: "short", access: "Free",
+      fields: ["FIVEPAISA_APP_KEY", "FIVEPAISA_USER_KEY", "FIVEPAISA_ENCRYPTION_KEY", "FIVEPAISA_CLIENT_CODE"],
+      impl: "data/adapters/fivepaisa.py",
+      notes: ["The most credential-heavy login of the set — four secrets plus a TOTP."]
+    },
+    {
+      name: "Alice Blue ANT", kind: "Broker · REST",
+      cov: [1, 1, 1, .5, 1, 1, 1], life: "Daily", lifeClass: "short", access: "Free",
+      fields: ["ALICE_USER_ID", "ALICE_API_KEY"],
+      impl: "data/adapters/aliceblue.py",
+      notes: ["Session key is derived from the user id and API key each day."]
+    },
+    {
+      name: "NSE public endpoints", kind: "Exchange · unofficial",
+      cov: [1, .5, 1, .5, 1, 0, 0], life: "None", lifeClass: "none", access: "Free",
+      fields: ["(no credentials — cookie warm-up required)"],
+      impl: "data/adapters/nse_public.py",
+      notes: [
+        "The option-chain endpoint publishes implied volatility and open-interest change directly, which is genuinely convenient.",
+        "Unofficial, rate-limited, requires a browser-like session handshake, and can change without notice. Fine as a corroborating chain source; not something to put an execution path behind."
+      ]
+    },
+    {
+      name: "TrueData", kind: "Data vendor · WS",
+      cov: [1, 1, 1, .5, 1, 0, 0], life: "Session", lifeClass: "none", access: "Paid",
+      fields: ["TRUEDATA_USERNAME", "TRUEDATA_PASSWORD"],
+      impl: "data/adapters/truedata.py",
+      notes: [
+        "Tick and one-second data over websocket, with a deep historical archive.",
+        "Data only — pair it with a broker adapter for orders and margin."
+      ]
+    },
+    {
+      name: "Global Datafeeds", kind: "Data vendor · WS",
+      cov: [1, 1, 1, .5, 1, 0, 0], life: "Session", lifeClass: "none", access: "Paid",
+      fields: ["GDFL_API_KEY", "GDFL_ENDPOINT"],
+      impl: "data/adapters/gdfl.py",
+      notes: ["Authorised NSE data vendor. Data only; no order path."]
+    },
+    {
+      name: "CSV / Parquet replay", kind: "Local · historical",
+      cov: [1, 1, 1, .5, 1, 0, 0], life: "None", lifeClass: "none", access: "Local",
+      fields: ["REPLAY_DATA_DIR", "REPLAY_START", "REPLAY_END"],
+      impl: "backtest/replay_source.py",
+      notes: [
+        "Drives BACKTEST and REPLAY. The brains are already clock-independent and deterministic, so replay needs a data source and a simulated fill model — not a second copy of the strategy.",
+        "Fills are simulated; there is no order path to a broker."
+      ]
+    },
+    {
+      name: "Simulator", kind: "Built-in · development",
+      cov: [1, 1, 1, 1, 1, 0, 1], life: "None", lifeClass: "none", access: "Built in",
+      fields: ["seed", "daily_drift_pct", "mean_reversion", "breadth_bias", "heavyweight_bias", "base_iv"],
+      impl: "data/adapters/mock.py",
+      notes: [
+        "The only source wired up in this build, and the only one that serves real Greeks — because it prices its own chain through Black-Scholes.",
+        "Must never be selected for LIVE. Its market character is configurable, which is how the test suite constructs genuine trends, ranges, and narrow heavyweight-driven rallies."
+      ]
+    }
+  ];
+
+  const COV_TITLES = ["Index quote", "Historical bars", "Option chain", "Greeks", "Open interest", "Order placement", "Margin"];
+
+  const CONTRIB = [
+    ["HDFCBANK", 0.273], ["ICICIBANK", 0.183], ["INFY", 0.182], ["RELIANCE", 0.128],
+    ["ITC", 0.101], ["BHARTIARTL", 0.092], ["TCS", 0.067], ["LT", 0.060],
+    ["AXISBANK", 0.052], ["MARUTI", 0.038]
+  ];
+
+  const SECTORS = [
+    ["Financials", 0.77], ["IT", 0.46], ["Energy", 0.25], ["FMCG", 0.20],
+    ["Telecom", 0.18], ["Industrials", 0.12], ["Auto", 0.07]
+  ];
+
+  const REGIMES = [
+    ["TREND_UP", 0.971], ["BREAKOUT", 0.788], ["HIGH_VOLATILITY", 0.027]
+  ];
+
+  const STRIKES = [
+    { score: 0.77, sell: 24650, buy: 24450, credit: 3165, ml: 11835, be: "24,607.80", rr: 0.27, delta: "+9.1", spread: "0.92%" },
+    { score: 0.76, sell: 24650, buy: 24400, credit: 3716, ml: 15034, be: "24,600.45", rr: 0.25, delta: "+10.9", spread: "0.96%" },
+    { score: 0.76, sell: 24650, buy: 24350, credit: 4189, ml: 18311, be: "24,594.15", rr: 0.23, delta: "+12.4", spread: "0.99%" },
+    { score: 0.71, sell: 24700, buy: 24450, credit: 4275, ml: 14475, be: "24,643.00", rr: 0.30, delta: "+11.9", spread: "0.92%" },
+    { score: 0.70, sell: 24700, buy: 24400, credit: 4826, ml: 17674, be: "24,635.65", rr: 0.27, delta: "+13.7", spread: "0.96%" }
+  ];
+
+  const GATE = [
+    ["decision_valid", "Signal and structure present", true],
+    ["instrument_valid", "NIFTY weekly, tradeable", true],
+    ["expiry_valid", "10 Sep 2026, 6.17 days", true],
+    ["strike_valid", "24650 / 24450 PE on chain", true],
+    ["lot_size_valid", "75 per lot", true],
+    ["quantity_valid", "1 lot proposed", true],
+    ["price_valid", "Within tick and band", true],
+    ["liquidity_valid", "OI above floor, two-sided", true],
+    ["spread_acceptable", "0.92% of mid", true],
+    ["market_session", "ACTIVE, 11:30 IST", true],
+    ["risk_approved", "Risk Engine not implemented", false],
+    ["margin_available", "Needs broker margin call", false],
+    ["daily_loss_limit", "Needs Risk Engine state", false],
+    ["position_limit", "Needs portfolio state", false],
+    ["duplicate_order_check", "Needs Redis dedup store", false],
+    ["kill_switch", "Needs Order Manager wiring", false]
+  ];
+
+  const MODE_NOTES = {
+    LIVE: "Live trading. Requires a broker adapter, a risk engine, and the execution gate — none of which exist in this build.",
+    PAPER: "Paper trading: the full brain runs, orders stop at a simulated broker.",
+    BACKTEST: "Historical run over a replay source. The same brain code, a simulated fill model.",
+    REPLAY: "Step a recorded session tick by tick. Useful for reproducing a decision exactly."
+  };
+
+  /* ------------------------------------------------------------ HELPERS */
+  const el = (tag, cls, html) => {
+    const n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (html !== undefined) n.innerHTML = html;
+    return n;
+  };
+
+  const money = n => "₹" + n.toLocaleString("en-IN");
+
+  /* Unsigned meter: magnitude, one hue, filled from the left. */
+  function meterU(name, value, max, label, title) {
+    const row = el("div", "meter");
+    if (title) row.title = title;
+    row.append(el("span", "name", name));
+    const track = el("span", "track-u");
+    const fill = el("i");
+    fill.style.width = Math.max(0, Math.min(100, (value / max) * 100)) + "%";
+    track.append(fill);
+    row.append(track, el("span", "value", label));
+    return row;
+  }
+
+  /* Signed meter: polarity, diverging from a centre baseline, so
+     direction reads from position as well as hue. */
+  function meterS(name, value, max, label, title) {
+    const row = el("div", "meter");
+    if (title) row.title = title;
+    row.append(el("span", "name", name));
+    const track = el("span", "track-s");
+    const fill = el("i", value >= 0 ? "pos" : "neg");
+    fill.style.width = Math.min(50, (Math.abs(value) / max) * 50) + "%";
+    track.append(fill);
+    row.append(track, el("span", "value", label));
+    return row;
+  }
+
+  /* ------------------------------------------------------------ RENDER: providers */
+  (function renderProviders() {
+    const tbody = document.getElementById("provider-rows");
+
+    PROVIDERS.forEach((p, i) => {
+      const tr = el("tr", "prov");
+
+      const tdBtn = el("td");
+      const btn = el("button", "disclose", "+");
+      btn.type = "button";
+      btn.setAttribute("aria-expanded", "false");
+      btn.setAttribute("aria-controls", "detail-" + i);
+      btn.setAttribute("aria-label", "Configuration for " + p.name);
+      tdBtn.append(btn);
+
+      const tdName = el("td");
+      tdName.append(el("div", "provname", `<b>${p.name}</b><span>${p.kind}</span>`));
+
+      tr.append(tdBtn, tdName);
+
+      p.cov.forEach((c, ci) => {
+        const cls = c === 1 ? "full" : c === 0.5 ? "calc" : "none";
+        const word = c === 1 ? "served" : c === 0.5 ? "derived locally" : "not available";
+        tr.append(el("td", "c", `<i class="cov ${cls}" title="${COV_TITLES[ci]}: ${word}"></i>`));
+      });
+
+      tr.append(el("td", "", `<span class="tokenlife ${p.lifeClass}">${p.life}</span>`));
+      tr.append(el("td", "", `<span style="font-size:12px;color:var(--muted)">${p.access}</span>`));
+      tr.append(el("td", "", p.impl.includes("mock")
+        ? '<span class="pill live"><span class="dot"></span>Connected</span>'
+        : '<span class="pill off"><span class="dot"></span>Not built</span>'));
+
+      const detail = el("tr", "detail");
+      detail.id = "detail-" + i;
+      detail.hidden = true;
+      const cell = el("td");
+      cell.colSpan = 12;
+
+      const body = el("div", "detailbody");
+      const fields = el("div");
+      fields.append(el("h4", null, "Credentials"));
+      const list = el("div", "fields");
+      p.fields.forEach(f => list.append(el("code", null, f)));
+      fields.append(list);
+
+      const impl = el("div");
+      impl.append(el("h4", null, "Adapter to implement"));
+      impl.append(el("p", "impl", p.impl));
+      impl.append(el("p", null,
+        "Implement against the capability interfaces it can actually serve — a provider with no order path implements the read interfaces only."));
+
+      const notes = el("div");
+      notes.append(el("h4", null, "Operating notes"));
+      p.notes.forEach(n => notes.append(el("p", null, n)));
+
+      body.append(fields, impl, notes);
+      cell.append(body);
+      detail.append(cell);
+
+      btn.addEventListener("click", () => {
+        const open = detail.hidden;
+        detail.hidden = !open;
+        btn.textContent = open ? "–" : "+";
+        btn.setAttribute("aria-expanded", String(open));
+      });
+
+      tbody.append(tr, detail);
+    });
+  })();
+
+  /* ------------------------------------------------------------ RENDER: meters */
+  (function renderMeters() {
+    const contrib = document.getElementById("contrib-meters");
+    CONTRIB.forEach(([name, v]) =>
+      contrib.append(meterU(name, v, 0.30, "+" + v.toFixed(3),
+        `${name} contributed ${v.toFixed(3)} index points, weight-adjusted`)));
+
+    const sectors = document.getElementById("sector-meters");
+    SECTORS.forEach(([name, v]) =>
+      sectors.append(meterS(name, v, 1, (v >= 0 ? "+" : "−") + Math.abs(v).toFixed(2),
+        `${name} sector score ${v >= 0 ? "+" : "−"}${Math.abs(v).toFixed(2)}`)));
+
+    const regimes = document.getElementById("regime-meters");
+    REGIMES.forEach(([name, v]) =>
+      regimes.append(meterU(name, v, 1, v.toFixed(3),
+        `${name} scored ${v.toFixed(3)}`)));
+  })();
+
+  /* ------------------------------------------------------------ RENDER: strikes */
+  (function renderStrikes() {
+    const tbody = document.getElementById("strike-rows");
+    STRIKES.forEach((s, i) => {
+      const tr = el("tr", i === 0 ? "chosen" : "");
+      tr.append(el("td", "c num", `<span style="color:${i === 0 ? "var(--brass)" : "inherit"}">${s.score.toFixed(2)}</span>`));
+      tr.append(el("td", "", `<span class="legs">
+        <span class="leg sell">S ${s.sell.toLocaleString("en-IN")} PE</span>
+        <span class="leg buy">B ${s.buy.toLocaleString("en-IN")} PE</span></span>`));
+      tr.append(el("td", "num", money(s.credit)));
+      tr.append(el("td", "num", money(s.ml)));
+      tr.append(el("td", "num", s.be));
+      tr.append(el("td", "c num", s.rr.toFixed(2)));
+      tr.append(el("td", "c num", s.delta));
+      tr.append(el("td", "c num", s.spread));
+      tbody.append(tr);
+    });
+  })();
+
+  /* ------------------------------------------------------------ RENDER: gate */
+  (function renderGate() {
+    const grid = document.getElementById("gate-grid");
+    GATE.forEach(([name, why, ok]) => {
+      const cell = el("div", ok ? "ok" : "no");
+      cell.append(el("span", "mk", ok ? "✓" : "!"));
+      cell.append(el("span", "n", `${name.replace(/_/g, " ")}<small>${why}</small>`));
+      grid.append(cell);
+    });
+  })();
+
+  /* ------------------------------------------------------------ CONTROLS */
+  (function wireControls() {
+    const banner = document.getElementById("banner");
+    const bannerMark = document.getElementById("banner-mark");
+    const bannerBody = document.getElementById("banner-body");
+    const modeReadout = document.getElementById("mode-readout");
+    const modeNote = document.getElementById("mode-note");
+    const kill = document.getElementById("kill-toggle");
+    const killLabel = document.getElementById("kill-label");
+    const llm = document.getElementById("llm-toggle");
+    const llmLabel = document.getElementById("llm-label");
+    const llmNote = document.getElementById("llm-note");
+    const glyph = document.querySelector(".wordmark .glyph");
+
+    let mode = "PAPER";
+
+    const DEFAULT_BODY = bannerBody.innerHTML;
+
+    function paint() {
+      if (kill.checked) {
+        banner.classList.add("blocked");
+        bannerMark.textContent = "HALT";
+        banner.querySelector("h3").innerHTML =
+          '<span class="who">Kill switch armed.</span> Every order fails at the gate.';
+        bannerBody.innerHTML =
+          "The <code class=\"mono\">kill_switch</code> check fails for every order while this is armed, " +
+          "regardless of run mode, signal quality, or risk approval. Disarming it is a deliberate act.";
+      } else {
+        banner.classList.remove("blocked");
+        bannerMark.textContent = "ACT";
+        banner.querySelector("h3").innerHTML =
+          '<span class="who">Execution is disabled.</span> The brain analyses; it cannot trade.';
+        bannerBody.innerHTML = DEFAULT_BODY;
+      }
+      modeReadout.textContent = mode;
+    }
+
+    document.querySelectorAll(".seg button").forEach(b => {
+      b.addEventListener("click", () => {
+        document.querySelectorAll(".seg button").forEach(o =>
+          o.setAttribute("aria-pressed", String(o === b)));
+        mode = b.dataset.mode;
+        modeNote.textContent = MODE_NOTES[mode];
+        paint();
+      });
+    });
+
+    kill.addEventListener("change", () => {
+      killLabel.textContent = kill.checked ? "Armed — all orders blocked" : "Disarmed";
+      paint();
+    });
+
+    llm.addEventListener("change", () => {
+      llmLabel.textContent = llm.checked
+        ? "LLM enabled · HybridProvider"
+        : "LLM disabled · DeterministicProvider";
+      llmNote.textContent = llm.checked
+        ? "The agent may now investigate state and challenge a thesis. It still cannot override risk, the gate, position limits, or the kill switch — it has no code path to any of them."
+        : "The engine is fully functional here. The agent may investigate; it can never override risk, the gate, or the kill switch.";
+      glyph.textContent = llm.checked ? "LLM ON" : "LLM OFF";
+    });
+
+    paint();
+  })();
+</script>

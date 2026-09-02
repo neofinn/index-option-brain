@@ -95,6 +95,28 @@ stamped from `MarketState.timestamp` so BACKTEST and REPLAY stay reproducible
 `brain/config.py`, injected per brain — which is what a Learning Engine
 proposal (spec §20) would eventually version.
 
+## Operations console design
+
+`docs/console-design.html` is a self-contained design for the operating
+surface: every broker and data-feed connection option with its capability
+coverage, credential shape and token lifetime; the run-mode / LLM / kill-switch
+controls; and the brain's current decision chain through to the execution gate.
+Open it directly in a browser.
+
+Two findings from building the connection matrix are worth stating here,
+because they shape the adapter work:
+
+- **No Indian broker API returns Greeks.** NSE's chain endpoint publishes
+  implied volatility but no sensitivities. Delta, gamma, theta and vega are
+  therefore computed in-process — which is why the Strike Engine can rank on
+  delta fit at all.
+- **Token lifetime is an architectural constraint, not a detail.** Most broker
+  tokens expire at the next login window, so an unattended engine needs either
+  a long-lived token or a login that can be scripted from a stored TOTP secret.
+
+The numbers shown in that page are a real run of the implemented pipeline
+against the simulator, not illustrative placeholders.
+
 ## Repository layout
 
 ```
