@@ -26,4 +26,4 @@ def test_execution_check_covers_every_mandatory_spec_check():
 
 def test_gate_result_defaults_to_no_order_when_not_approved():
     result = ExecutionGateResult(approved=False, failed_checks=[ExecutionCheck.RISK_APPROVED])
-    assert result.order_request is None
+    assert result.order_requests == []

@@ -43,7 +43,12 @@ class OrderEvent(BaseModel):
 
 class OrderRequest(BaseModel):
     """What the Execution Gate hands to the Order Manager once every mandatory
-    check in spec §16 has passed."""
+    check in spec §16 has passed.
+
+    One request per leg. A multi-leg structure produces several, and their
+    `sequence` is not cosmetic — see `ExecutionGate` for why the protective
+    long leg must be sent first.
+    """
 
     model_config = ConfigDict(frozen=True)
 
@@ -52,4 +57,13 @@ class OrderRequest(BaseModel):
     contract: OptionContractSpec
     side: OrderSide
     quantity: int
+    """Quantity in **units**, i.e. lots x lot_size, which is what Indian
+    broker APIs take. `lots` carries the same size in lots so the two can
+    never be silently confused — a request read in the wrong unit is a
+    position 75x too large, and the difference is not visible in the number.
+    """
+    lots: int
     limit_price: Decimal | None
+    sequence: int = 0
+    """Submission order within the structure, ascending. Risk-reducing legs
+    come first."""
