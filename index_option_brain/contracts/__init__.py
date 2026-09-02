@@ -1,4 +1,5 @@
 from index_option_brain.contracts.analysis import (
+    AnalysisBundle,
     ConstituentAnalysis,
     IndexAnalysis,
     OptionsAnalysis,
@@ -7,23 +8,30 @@ from index_option_brain.contracts.analysis import (
 )
 from index_option_brain.contracts.decision import TradeDecision
 from index_option_brain.contracts.enums import (
+    BarInterval,
+    BreakoutState,
     Direction,
     FailureAction,
     FailureDomain,
+    IvRegime,
     MarketRegimeType,
     MarketSessionState,
     Moneyness,
     OptionType,
     OrderLifecycleState,
+    OrderSide,
+    ScenarioKind,
     StrategyType,
     TradeDecisionType,
     TradeLifecycleState,
     TriggerType,
+    VwapRelationship,
 )
 from index_option_brain.contracts.events import Event
 from index_option_brain.contracts.feedback import Lesson, TradeFeedback
 from index_option_brain.contracts.instruments import (
     AccountSnapshot,
+    Bar,
     ConstituentQuote,
     ConstituentSpec,
     Greeks,
@@ -36,6 +44,7 @@ from index_option_brain.contracts.market_state import (
     ConstituentState,
     IndexState,
     MarketState,
+    OpeningRange,
     OptionsState,
     SectorState,
     VolatilityState,
@@ -51,10 +60,14 @@ from index_option_brain.contracts.risk import RiskDecision
 from index_option_brain.contracts.scenario import Scenario
 from index_option_brain.contracts.signal import Signal
 from index_option_brain.contracts.strategy import StrategyCandidate
-from index_option_brain.contracts.strike import StrikeCandidate
+from index_option_brain.contracts.strike import StrikeCandidate, StrikeLeg
 
 __all__ = [
     "AccountSnapshot",
+    "AnalysisBundle",
+    "Bar",
+    "BarInterval",
+    "BreakoutState",
     "ConstituentAnalysis",
     "ConstituentQuote",
     "ConstituentSpec",
@@ -68,11 +81,13 @@ __all__ = [
     "IndexQuote",
     "IndexSpec",
     "IndexState",
+    "IvRegime",
     "Lesson",
     "MarketRegimeType",
     "MarketSessionState",
     "MarketState",
     "Moneyness",
+    "OpeningRange",
     "OptionContractSpec",
     "OptionQuote",
     "OptionType",
@@ -82,6 +97,7 @@ __all__ = [
     "OrderEvent",
     "OrderLifecycleState",
     "OrderRequest",
+    "OrderSide",
     "Position",
     "PositionEvent",
     "PositionLeg",
@@ -89,11 +105,13 @@ __all__ = [
     "RegimeState",
     "RiskDecision",
     "Scenario",
+    "ScenarioKind",
     "SectorState",
     "Signal",
     "StrategyCandidate",
     "StrategyType",
     "StrikeCandidate",
+    "StrikeLeg",
     "TradeDecision",
     "TradeDecisionType",
     "TradeFeedback",
@@ -101,4 +119,5 @@ __all__ = [
     "TriggerType",
     "VolatilityAnalysis",
     "VolatilityState",
+    "VwapRelationship",
 ]

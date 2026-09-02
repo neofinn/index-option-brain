@@ -173,3 +173,56 @@ class FailureAction(StrEnum):
     CONTINUE_WITHOUT_LLM = "CONTINUE_WITHOUT_LLM"
     FAIL_SAFE = "FAIL_SAFE"
     NO_NEW_ORDERS = "NO_NEW_ORDERS"
+
+
+class OrderSide(StrEnum):
+    BUY = "BUY"
+    SELL = "SELL"
+
+
+class BarInterval(StrEnum):
+    MINUTE_1 = "1m"
+    MINUTE_5 = "5m"
+    MINUTE_15 = "15m"
+    DAY = "1d"
+
+
+class BreakoutState(StrEnum):
+    """Spec §5 "breakout/breakdown state". A *failed* breakout is a distinct
+    state, not the absence of one — it is what the Scenario Engine's
+    "breakout failure" scenario keys off."""
+
+    NONE = "NONE"
+    BREAKOUT = "BREAKOUT"
+    BREAKDOWN = "BREAKDOWN"
+    FAILED_BREAKOUT = "FAILED_BREAKOUT"
+    FAILED_BREAKDOWN = "FAILED_BREAKDOWN"
+
+
+class VwapRelationship(StrEnum):
+    ABOVE = "ABOVE"
+    BELOW = "BELOW"
+    AT = "AT"
+
+
+class IvRegime(StrEnum):
+    """Spec §8 "IV regime"."""
+
+    LOW = "LOW"
+    NORMAL = "NORMAL"
+    ELEVATED = "ELEVATED"
+    HIGH = "HIGH"
+
+
+class ScenarioKind(StrEnum):
+    """Spec §10. NO_TRADE is a first-class scenario, not a failure mode —
+    "The engine must permit NO TRADE / UNCERTAIN"."""
+
+    BULLISH_CONTINUATION = "BULLISH_CONTINUATION"
+    BEARISH_CONTINUATION = "BEARISH_CONTINUATION"
+    RANGE = "RANGE"
+    BREAKOUT_FAILURE = "BREAKOUT_FAILURE"
+    REVERSAL = "REVERSAL"
+    EXPANSION = "EXPANSION"
+    CONTRACTION = "CONTRACTION"
+    NO_TRADE = "NO_TRADE"

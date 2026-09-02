@@ -5,6 +5,13 @@ concrete adapter (Zerodha, Upstox, Angel One, a backtest replay source, ...)
 implements these interfaces and hands back the normalized contracts from
 `index_option_brain.contracts`, never raw provider payloads.
 
+The interfaces are split by capability rather than by vendor, because
+coverage differs: a provider may serve a live chain with Greeks but no
+historical bars, or index data but no constituent weights. Splitting them
+lets the system compose one working data layer out of several partial
+providers, and lets the failure contract (spec §29) degrade precisely — an
+incomplete chain blocks options entry without blocking everything else.
+
 These are interfaces only. A live adapter belongs in its own module (e.g.
 `data/adapters/zerodha.py`) and must never be faked as if it were production
 — see `data/adapters/mock.py` for the explicitly-labeled simulator used in
@@ -16,8 +23,10 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from datetime import date
 
+from index_option_brain.contracts.enums import BarInterval
 from index_option_brain.contracts.instruments import (
     AccountSnapshot,
+    Bar,
     ConstituentQuote,
     ConstituentSpec,
     IndexQuote,
@@ -41,6 +50,18 @@ class IndexDataAdapter(ABC):
     @abstractmethod
     async def get_index_quote(self, symbol: str) -> IndexQuote: ...
 
+    @abstractmethod
+    async def get_index_bars(
+        self, symbol: str, interval: BarInterval, count: int
+    ) -> list[Bar]:
+        """Completed bars, oldest first.
+
+        Must NOT include the currently-forming candle: the brains treat the
+        last daily bar as the previous session (PDH/PDL/PDC), and appending a
+        partial bar there would silently corrupt every level derived from it.
+        """
+        ...
+
 
 class ConstituentDataAdapter(ABC):
     @abstractmethod
@@ -58,6 +79,13 @@ class OptionsChainAdapter(ABC):
     async def get_option_chain(
         self, underlying_symbol: str, expiry: date
     ) -> list[OptionQuote]: ...
+
+
+class VolatilityDataAdapter(ABC):
+    @abstractmethod
+    async def get_india_vix(self) -> tuple[float, float]:
+        """Returns (current, previous_close) for India VIX."""
+        ...
 
 
 class AccountDataAdapter(ABC):

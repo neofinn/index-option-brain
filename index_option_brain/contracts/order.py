@@ -8,7 +8,7 @@ from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from index_option_brain.contracts.enums import OrderLifecycleState
+from index_option_brain.contracts.enums import OrderLifecycleState, OrderSide
 from index_option_brain.contracts.instruments import OptionContractSpec
 
 
@@ -19,11 +19,13 @@ class Order(BaseModel):
     decision_id: str
     thesis_id: str
     contract: OptionContractSpec
-    side: str  # "BUY" | "SELL"
+    side: OrderSide
     quantity: int
     limit_price: Decimal | None
     state: OrderLifecycleState
     broker_order_id: str | None = None
+    filled_quantity: int = 0
+    average_fill_price: Decimal | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -48,6 +50,6 @@ class OrderRequest(BaseModel):
     decision_id: str
     thesis_id: str
     contract: OptionContractSpec
-    side: str
+    side: OrderSide
     quantity: int
     limit_price: Decimal | None
