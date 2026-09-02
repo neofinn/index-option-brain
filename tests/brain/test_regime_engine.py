@@ -281,3 +281,95 @@ class TestOutputShape:
         state: MarketState = request.getfixturevalue(fixture_name)
         result = QuantitativeBrain().run(state)
         assert result.regime.regime is expected
+
+
+class TestDataSufficiency:
+    """The third route to UNCERTAIN: there was nothing to classify.
+
+    This was found by running the engine against the live NSE feed, which
+    serves a chain and India VIX but no historical bars. With no bars the
+    index analysis reports every score as 0.0, and the engine happily returned
+    RANGE at 1.00 with 0.58 confidence — a confident classification of a
+    market nothing had measured. `IndexAnalysis` uses 0.0 for both "measured
+    as neutral" and "not measured", and that conflation is what makes an empty
+    analysis dangerous rather than merely useless.
+    """
+
+    def test_no_index_coverage_yields_uncertain(self):
+        state = classify(index=index_analysis(confidence=0.0))
+        assert state.regime is MarketRegimeType.UNCERTAIN
+        assert state.confidence == 0.0
+
+    def test_the_reason_names_coverage_not_flatness(self):
+        """An operator reading "RANGE" acts differently than one reading "no
+        data", so the evidence has to distinguish them."""
+        state = classify(index=index_analysis(confidence=0.0))
+        joined = " ".join(state.evidence)
+        assert "coverage" in joined
+        assert "unmeasured" in joined
+
+    def test_without_the_gate_zero_coverage_classifies_confidently(self):
+        """What the gate actually prevents. With the floor disabled, an
+        analysis that measured nothing still produces RANGE at full score —
+        because the RANGE candidate reads a composite of 0.0 as perfect
+        flatness. Fixing that candidate alone would not be enough either: the
+        same unmeasured zeros feed LOW_VOLATILITY, which reads a volatility
+        score of 0.0 as perfectly calm. Hence a gate on coverage rather than a
+        patch on one candidate."""
+        ungated = DeterministicRegimeEngine(
+            RegimeEngineConfig(min_index_confidence=0.0)
+        )
+        state = ungated.classify(
+            index_analysis(confidence=0.0, volatility_score=0.0),
+            constituent_analysis(),
+            options_analysis(),
+            volatility_analysis(iv_percentile=None),
+        )
+        assert state.regime is MarketRegimeType.RANGE
+        assert state.scores["RANGE"] >= 0.9
+        assert state.confidence > 0.0
+
+    def test_thin_coverage_also_yields_uncertain(self):
+        """A handful of bars is not a measured market. Index confidence folds
+        in bar sufficiency, so a thin series lands below the floor too."""
+        state = classify(index=index_analysis(confidence=0.05))
+        assert state.regime is MarketRegimeType.UNCERTAIN
+
+    def test_a_genuinely_flat_measured_market_is_still_range(self):
+        """The gate must not swallow the legitimate case: a market with full
+        bar coverage and nothing happening is a range, and saying so is the
+        whole point of having a RANGE label."""
+        state = classify(
+            index=index_analysis(confidence=0.4, breakout_state=BreakoutState.NONE)
+        )
+        assert state.regime is MarketRegimeType.RANGE
+
+    def test_expiry_survives_missing_index_data(self):
+        """Expiry is a calendar fact read off the option chain, not a
+        measurement of structure, so it stays valid when structure does not.
+        The live feed serves the chain even when it serves no bars."""
+        state = classify(
+            index=index_analysis(confidence=0.0),
+            volatility=volatility_analysis(days_to_expiry=0.5),
+        )
+        assert state.regime is MarketRegimeType.EXPIRY
+
+    def test_the_floor_is_configurable(self):
+        lenient = DeterministicRegimeEngine(
+            RegimeEngineConfig(min_index_confidence=0.0)
+        )
+        state = lenient.classify(
+            index_analysis(confidence=0.0),
+            constituent_analysis(),
+            options_analysis(),
+            volatility_analysis(),
+        )
+        assert state.regime is MarketRegimeType.RANGE
+
+    def test_scores_are_still_reported_for_inspection(self):
+        """Refusing to classify is not refusing to explain. The candidate
+        scores stay attached so an operator can see what the engine would have
+        said and why it declined."""
+        state = classify(index=index_analysis(confidence=0.0))
+        assert state.scores
+        assert set(state.scores) >= {"RANGE", "TREND_UP", "TREND_DOWN"}

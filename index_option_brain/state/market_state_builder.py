@@ -88,7 +88,7 @@ class MarketStateBuilder:
     def __init__(
         self,
         index_adapter: IndexDataAdapter,
-        constituent_adapter: ConstituentDataAdapter,
+        constituent_adapter: ConstituentDataAdapter | None,
         options_adapter: OptionsChainAdapter,
         volatility_adapter: VolatilityDataAdapter | None = None,
         iv_history: IvHistoryStore | None = None,
@@ -98,6 +98,16 @@ class MarketStateBuilder:
         intraday_interval: BarInterval = BarInterval.MINUTE_5,
         opening_range_minutes: int = 15,
     ) -> None:
+        """
+        `constituent_adapter` may be None when no provider serves index
+        breadth — NSE's public API does not, and a broker adapter has to fill
+        the gap. It has no default on purpose: a caller must state that breadth
+        is unavailable rather than omit it and not notice. With None, the
+        constituent state is genuinely empty and the Constituent brain
+        degrades, which is the required behaviour for a partial data layer
+        (spec §2, §29). A stub adapter returning empty lists would look like a
+        connected provider observing a market with no participants.
+        """
         self._index_adapter = index_adapter
         self._constituent_adapter = constituent_adapter
         self._options_adapter = options_adapter
@@ -128,10 +138,15 @@ class MarketStateBuilder:
             else []
         )
 
-        constituent_specs = await self._constituent_adapter.get_constituents(index_symbol)
-        constituent_quotes = await self._constituent_adapter.get_constituent_quotes(
-            [spec_.symbol for spec_ in constituent_specs]
-        )
+        constituent_specs: list[ConstituentSpec] = []
+        constituent_quotes: list[ConstituentQuote] = []
+        if self._constituent_adapter is not None:
+            constituent_specs = await self._constituent_adapter.get_constituents(
+                index_symbol
+            )
+            constituent_quotes = await self._constituent_adapter.get_constituent_quotes(
+                [spec_.symbol for spec_ in constituent_specs]
+            )
 
         weights = {s.symbol: float(s.weight) for s in constituent_specs}
         sectors = {s.symbol: s.sector for s in constituent_specs}

@@ -95,6 +95,38 @@ class DeterministicRegimeEngine(RegimeEngine):
                 scores={k.value: round(v, 3) for k, v in scores.items()},
             )
 
+        # Data sufficiency, checked after the expiry context because expiry is
+        # a calendar fact read off the option chain rather than a measurement
+        # of structure, and stays valid when structure is unavailable.
+        #
+        # Every structural candidate above is derived from index bars, and
+        # `IndexAnalysis` reports 0.0 for both "measured as neutral" and "not
+        # measured at all". That conflation is what makes an empty analysis
+        # dangerous rather than merely useless: run live against NSE with no
+        # bar history, a composite of 0.0 scored RANGE at 1.00 and reported
+        # 0.58 confidence — a confident classification of a market nothing had
+        # looked at. Suppressing RANGE alone would just hand the same label
+        # problem to LOW_VOLATILITY, which reads an unmeasured volatility
+        # score of 0.0 as perfectly calm. So the gate is on coverage, before
+        # any score is believed.
+        if index.confidence < cfg.min_index_confidence:
+            evidence.append(
+                f"Index measurement coverage {index.confidence:.2f} is below the "
+                f"{cfg.min_index_confidence:.2f} floor — there is not enough "
+                "measured structure to classify a regime"
+            )
+            evidence.append(
+                f"Leading candidate {best.value} scored {best_score:.2f}, but from "
+                "unmeasured inputs rather than a flat market"
+            )
+            return RegimeState(
+                regime=MarketRegimeType.UNCERTAIN,
+                confidence=0.0,
+                evidence=evidence,
+                invalidations=["A regime becomes classifiable once bars are available"],
+                scores={k.value: round(v, 3) for k, v in scores.items()},
+            )
+
         input_confidence = ind.mean(
             [index.confidence, constituents.confidence, options.confidence, volatility.confidence]
         ) or 0.0

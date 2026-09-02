@@ -99,6 +99,16 @@ class RegimeEngineConfig(_Config):
     expansion_threshold: float = 0.35
     min_confidence: float = 0.30
     """Below this the winning regime is reported as UNCERTAIN instead."""
+    min_index_confidence: float = 0.10
+    """Index measurement coverage below which no regime is classified at all.
+
+    Distinct from `min_confidence`, which judges the winning *score*. This one
+    judges whether there was anything to score: every structural candidate is
+    derived from index bars, and with no bars the index analysis reports every
+    score as 0.0 — which the RANGE candidate reads as "perfectly flat" and the
+    LOW_VOLATILITY candidate reads as "perfectly calm". Without this gate an
+    empty analysis produces a confident label.
+    """
     separation_threshold: float = 0.10
     """Two regimes scoring within this of each other is not a classification."""
 
