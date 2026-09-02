@@ -43,7 +43,7 @@ def engine_on(session) -> LiveEngine:
 
 @pytest.fixture
 def client() -> TestClient:
-    return TestClient(create_app(engine_on(nse_session())))
+    return TestClient(create_app(engine_on(nse_session()), run_poller=False))
 
 
 @pytest.fixture
@@ -52,7 +52,7 @@ def blocked_client() -> TestClient:
     session = nse_session(
         allIndices=HttpResponse(200, "<html>Access Denied</html>"),
     )
-    return TestClient(create_app(engine_on(session)))
+    return TestClient(create_app(engine_on(session), run_poller=False))
 
 
 class TestStatus:

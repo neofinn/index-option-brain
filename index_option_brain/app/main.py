@@ -27,6 +27,7 @@ from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from index_option_brain.app.live import FeedUnavailable, LiveEngine, session_label
+from index_option_brain.app.runner import MarketPoller, PollerConfig
 from index_option_brain.config.settings import get_settings
 from index_option_brain.contracts.provider import Capability, ProviderDescriptor
 from index_option_brain.data.providers import (
@@ -82,26 +83,98 @@ def _describe(provider: ProviderDescriptor, health: Any) -> dict[str, Any]:
     }
 
 
-def create_app(engine: LiveEngine | None = None) -> FastAPI:
+def create_app(
+    engine: LiveEngine | None = None,
+    *,
+    poller: MarketPoller | None = None,
+    run_poller: bool = True,
+) -> FastAPI:
+    """Build the app.
+
+    `run_poller=False` is for tests: they drive cycles explicitly rather than
+    racing a background loop, and a loop reaching the network from a test
+    suite is a test that fails when the market is shut.
+    """
     settings = get_settings()
     live = engine or LiveEngine()
+    market_poller = poller or MarketPoller(
+        live, symbols=("NIFTY", "BANKNIFTY"), config=PollerConfig()
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        # The loop is what makes the engine run continuously rather than only
+        # when the console is open — and it is the only thing that
+        # accumulates bars, since NSE serves no history.
+        if run_poller:
+            await market_poller.start()
         try:
             yield
         finally:
+            await market_poller.stop()
             await live.aclose()
 
     app = FastAPI(title="Index Option Brain", version="0.1.0", lifespan=lifespan)
     app.state.live = live
+    app.state.poller = market_poller
 
     @app.get("/health")
     def health() -> dict[str, object]:
+        """Liveness. Always 200 while the process is up.
+
+        Deliberately not gated on the feed: a process manager restarting the
+        app because NSE is rate-limiting would turn a data outage into an
+        availability outage, and lose the accumulated bars with it.
+        """
         return {
             "status": "ok",
             "llm_enabled": settings.llm_enabled,
             "run_mode": settings.run_mode,
+        }
+
+    @app.get("/ready")
+    def ready() -> JSONResponse:
+        """Readiness: is the loop running and getting data.
+
+        This is what an uptime check should watch. It answers 503 when the
+        loop has failed its last three polls, because a process that is alive
+        but blind looks identical to a healthy one from `/health`.
+        """
+        snapshot = market_poller.snapshot()
+        status = 200 if snapshot["running"] and snapshot["healthy"] else 503
+        return JSONResponse(snapshot, status_code=status)
+
+    @app.get("/api/runner")
+    def runner() -> dict[str, object]:
+        """What the loop has been doing. Counted, not estimated.
+
+        The console shows these so an operator can tell "running and quiet"
+        from "running and broken" — which look the same in a single snapshot.
+        """
+        return market_poller.snapshot()
+
+    @app.get("/api/events")
+    def events(symbol: str = "NIFTY", limit: int = 40) -> dict[str, object]:
+        """Recently detected triggers, newest first.
+
+        A trigger only ever means "something changed; analyze it" (spec §4),
+        so nothing here is an instruction and no payload carries an order.
+        """
+        recent = market_poller.recent_events(limit=limit)
+        return {
+            "symbol": symbol.upper(),
+            "events": [
+                {
+                    "event_id": event.event_id,
+                    "trigger_type": str(event.trigger_type),
+                    "timestamp": event.timestamp.isoformat(),
+                    "significance_score": event.significance_score,
+                    "payload": event.payload,
+                }
+                for event in recent
+            ],
+            "detected": market_poller.stats.events_detected,
+            "significant": market_poller.stats.events_significant,
         }
 
     @app.get("/api/status")

@@ -50,7 +50,7 @@ switch, and the engine must never require it to exist.
 | Database schema | `Base` + UUID/timestamp/version mixin only — the ~27 tables from §27 are not yet modeled |
 | FastAPI app + operations console | **Implemented** — live status/providers/market/analysis endpoints, `docs/console.html` |
 
-875 tests pass; `ruff` and `mypy --strict` are clean.
+892 tests pass; `ruff` and `mypy --strict` are clean.
 
 ### Where the pipeline deliberately stops
 
@@ -108,6 +108,26 @@ stamped from `MarketState.timestamp` so BACKTEST and REPLAY stay reproducible
 **Parameters are typed config, not magic numbers.** Every threshold lives in
 `brain/config.py`, injected per brain — which is what a Learning Engine
 proposal (spec §20) would eventually version.
+
+## Running it always-on
+
+The engine has to run continuously, not on page load: NSE serves no history,
+so the only source of bars is the aggregator observing snapshots as the
+session proceeds. `app/runner.py` polls on a loop, feeds each snapshot to the
+Trigger Engine, and runs the brain **only when a significant event fires** —
+which is the point of having an event engine rather than a timer. Measured on
+a closed market: six cycles, one significant event, one analysis.
+
+`deploy/` has a Dockerfile, a Compose file that serves the console over
+`tailscale serve` (tailnet-only HTTPS, no host port published), and a
+hardened systemd unit for a bare-metal install. See `deploy/README.md`.
+
+Monitor `/ready`, not `/health`. `/health` is liveness and stays 200 through
+a data outage on purpose — a process manager restarting the app because NSE
+is rate-limiting would turn a data problem into an availability problem and
+discard every bar observed that session. `/ready` answers 503 once the loop
+has failed three polls in a row, because a process that is alive but blind
+looks identical to a healthy one from `/health`.
 
 ## Operations console
 
