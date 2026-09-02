@@ -51,7 +51,7 @@ switch, and the engine must never require it to exist.
 | Database schema | `Base` + UUID/timestamp/version mixin only — the ~27 tables from §27 are not yet modeled |
 | FastAPI app + operations console | **Implemented** — live status/providers/market/analysis endpoints, `docs/console.html` |
 
-983 tests pass; `ruff` and `mypy --strict` are clean.
+994 tests pass; `ruff` and `mypy --strict` are clean.
 
 ### Where the pipeline deliberately stops
 
@@ -420,6 +420,37 @@ on the risk-free rate and day-count convention used to derive them, and Dhan
 publishes neither — so mixing its numbers with NSE-derived ones would put two
 conventions into one delta-fit ranking, comparing quantities that are not the
 same quantity. `trust_broker_greeks=True` overrides that deliberately.
+
+### "Expected move" is two different numbers
+
+A widely shared explanation of NIFTY expected move gives two methods and
+presents them as two ways to get the same figure:
+
+1. `spot x IV x sqrt(T)`
+2. the ATM call + ATM put premium — "the straddle cheat code"
+
+They differ by **20%**, always. Neither is wrong; they are different
+statistics:
+
+- Method 1 is **one standard deviation** — a containment band, about 68% of
+  outcomes inside it.
+- Method 2 is **E|move|**, the expectation of the absolute move, which is
+  exactly what an ATM straddle is worth. It equals one sigma times
+  `sqrt(2/pi) = 0.7979`.
+
+Verified against this repository's own pricer: the ratio came out 0.7978–0.7979
+across every spot, IV and tenor tested. On the post's own example — NIFTY
+25,000, 12% IV, 30 days — Method 1 gives **860** points and Method 2 gives
+**686**. Using the straddle figure as a one-sigma band selects strikes 20% too
+close to spot.
+
+Both are now reported separately (`expected_move`, `expected_absolute_move`),
+and because the ratio is a constant, the **observed** straddle became a free
+consistency check on the chain. Measured against the live NIFTY chain: ATM
+straddle 245.6 against 243.8 implied by ATM IV — **0.73% apart**. A material
+gap is therefore not a modelling disagreement, it is a stale IV, a book too
+wide to mark, or a genuine dislocation, and it is reported as such rather than
+as a market view.
 
 ### The lot size was wrong, and how that got found
 

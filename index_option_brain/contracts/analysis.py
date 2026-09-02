@@ -133,6 +133,34 @@ class VolatilityAnalysis(BaseModel):
 
     regime: IvRegime
     expected_move: Decimal
+    """One standard deviation to expiry: spot x IV x sqrt(T).
+
+    About 68% of outcomes fall inside +/- this. It is **not** the same number
+    as the ATM straddle price, and the two are routinely conflated — see
+    `expected_absolute_move`.
+    """
+    expected_absolute_move: Decimal | None = None
+    """E|move| — the expectation of the absolute move, which is what an ATM
+    straddle is worth.
+
+    Exactly `expected_move * sqrt(2/pi)`, so about **20% smaller** than one
+    sigma. Both are legitimate statistics and they answer different questions:
+    one sigma is a containment band, this is an average magnitude. Using the
+    straddle number as a one-sigma band picks strikes 20% too close.
+    """
+    straddle_price: Decimal | None = None
+    """The observed ATM straddle mid, when the chain supplies both sides."""
+    straddle_divergence: float | None = None
+    """How far the observed straddle sits from what ATM IV implies, as a
+    fraction.
+
+    Theory says `straddle / (spot x IV x sqrt(T))` is sqrt(2/pi) = 0.7979 for
+    any spot, IV and tenor. Measured against the live NIFTY chain it came out
+    at 0.8037 — 0.73% off. So a material deviation is not a modelling
+    question, it is a data-quality signal: a stale IV, a book too wide to
+    mark, or a genuine dislocation. Free, because both numbers are already
+    being computed.
+    """
     iv_score: float
     """Premium *richness*, from implied versus realized volatility: positive
     means options are expensive (favours collecting premium), negative means

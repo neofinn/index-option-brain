@@ -11,6 +11,24 @@ Two different questions live here and are kept separate:
 High IV does not mean expensive: IV at the 90th percentile is fair if
 realized volatility is running just as hot. Conflating the two is how
 option sellers end up short gamma into a genuinely moving market.
+
+A third pair is kept separate for the same reason. "Expected move" names two
+different statistics that differ by a fixed 20%:
+
+  * `expected_move` — one standard deviation, `spot x IV x sqrt(T)`. A
+    containment band: about 68% of outcomes land inside it.
+  * `expected_absolute_move` — `E|move|`, which is what an ATM straddle is
+    worth, and exactly `sqrt(2/pi) = 0.7979` times one sigma.
+
+Both are correct answers to different questions, and they are routinely
+presented as two ways to compute the same number. Using the straddle figure
+as a one-sigma band selects strikes 20% too close to spot.
+
+Because the ratio is a constant for any spot, IV and tenor, the *observed*
+straddle gives a free consistency check on the chain. Measured against the
+live NIFTY chain it came out at 0.8037 against a theoretical 0.7979 — 0.73%
+off. A material gap therefore is not a modelling disagreement; it is a stale
+IV, a book too wide to mark, or a real dislocation.
 """
 
 from __future__ import annotations
@@ -22,8 +40,12 @@ from decimal import Decimal
 from index_option_brain.brain import indicators as ind
 from index_option_brain.brain.config import VolatilityBrainConfig
 from index_option_brain.contracts.analysis import VolatilityAnalysis
-from index_option_brain.contracts.enums import IvRegime
+from index_option_brain.contracts.enums import IvRegime, OptionType
 from index_option_brain.contracts.market_state import MarketState
+
+# E|move| / sigma for a normal distribution. The constant that links the ATM
+# straddle price to the one-sigma move, for any spot, IV and tenor.
+_E_ABS_OVER_SIGMA = math.sqrt(2.0 / math.pi)
 
 
 class VolatilityEngine(ABC):
@@ -83,19 +105,31 @@ class DeterministicVolatilityEngine(VolatilityEngine):
         evidence.extend(expansion_evidence)
 
         expected_move = self._expected_move(spot, atm_iv, days_to_expiry, cfg)
+        absolute_move = expected_move * _E_ABS_OVER_SIGMA if expected_move > 0 else 0.0
         if expected_move > 0:
             evidence.append(
-                f"One-sigma expected move to expiry: {expected_move:.0f} points "
-                f"({days_to_expiry:.1f} days)"
-                if days_to_expiry is not None
-                else f"One-sigma expected move: {expected_move:.0f} points"
+                f"One-sigma move to expiry {expected_move:.0f} points, average "
+                f"absolute move {absolute_move:.0f} points"
+                + (f" ({days_to_expiry:.1f} days)" if days_to_expiry is not None else "")
             )
+
+        straddle, divergence, straddle_evidence = self._straddle_check(
+            state, spot, expected_move, cfg
+        )
+        evidence.extend(straddle_evidence)
 
         confidence = self._confidence(atm_iv, history, realized, cfg)
 
         return VolatilityAnalysis(
             regime=regime,
             expected_move=Decimal(str(round(expected_move, 2))),
+            expected_absolute_move=(
+                Decimal(str(round(absolute_move, 2))) if expected_move > 0 else None
+            ),
+            straddle_price=(
+                Decimal(str(round(straddle, 2))) if straddle is not None else None
+            ),
+            straddle_divergence=divergence,
             iv_score=ind.clamp(iv_score),
             expansion_score=ind.clamp(expansion_score),
             confidence=confidence,
@@ -189,6 +223,65 @@ class DeterministicVolatilityEngine(VolatilityEngine):
         if atm_iv is None or days_to_expiry is None or days_to_expiry <= 0:
             return 0.0
         return spot * (atm_iv / 100.0) * math.sqrt(days_to_expiry / cfg.calendar_days_per_year)
+
+    def _straddle_check(
+        self,
+        state: MarketState,
+        spot: float,
+        expected_move: float,
+        cfg: VolatilityBrainConfig,
+    ) -> tuple[float | None, float | None, list[str]]:
+        """Compare the observed ATM straddle against what ATM IV implies.
+
+        Returns `(straddle, divergence, evidence)`, all `None`-able, because
+        this is a measurement and an unmarkable ATM pair is not one. It reads
+        the mid rather than the last trade: a stale LTP on either leg would
+        manufacture a dislocation out of nothing.
+        """
+        chain = state.options_state.chain
+        if not chain or expected_move <= 0:
+            return None, None, []
+
+        strikes = {quote.contract.strike for quote in chain}
+        if not strikes:
+            return None, None, []
+        atm_strike = min(strikes, key=lambda strike: abs(float(strike) - spot))
+        legs = {
+            quote.contract.option_type: quote
+            for quote in chain
+            if quote.contract.strike == atm_strike
+        }
+        call, put = legs.get(OptionType.CE), legs.get(OptionType.PE)
+        if call is None or put is None:
+            return None, None, []
+        # Both sides have to be genuinely two-sided. `mid` falls back to LTP,
+        # and a straddle built from two stale prints is not an observation.
+        if None in (call.bid, call.ask, put.bid, put.ask):
+            return None, None, []
+
+        straddle = float(call.mid + put.mid)
+        if straddle <= 0:
+            return None, None, []
+
+        implied = expected_move * _E_ABS_OVER_SIGMA
+        divergence = straddle / implied - 1.0
+        average_pct = expected_move / spot * 100 * _E_ABS_OVER_SIGMA
+        evidence = [
+            (
+                f"ATM {atm_strike} straddle {straddle:.1f} vs {implied:.1f} "
+                f"implied by a {average_pct:.2f}% average move "
+                f"({divergence * 100:+.1f}%)"
+            )
+        ]
+        if abs(divergence) > cfg.max_straddle_divergence:
+            # Not a view on the market. The two numbers are linked by a
+            # constant, so they cannot legitimately disagree by this much.
+            evidence.append(
+                f"Straddle and ATM IV disagree by {divergence * 100:+.1f}%, beyond "
+                f"the {cfg.max_straddle_divergence * 100:.0f}% tolerance — the "
+                "chain's IV or its ATM book is unreliable, not the model"
+            )
+        return straddle, divergence, evidence
 
     def _confidence(
         self,

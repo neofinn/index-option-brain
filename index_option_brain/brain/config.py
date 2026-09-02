@@ -88,6 +88,15 @@ class VolatilityBrainConfig(_Config):
     new series as a volatility extreme."""
     trading_days_per_year: int = 252
     calendar_days_per_year: int = 365
+    max_straddle_divergence: float = 0.08
+    """How far the observed ATM straddle may sit from what ATM IV implies
+    before it is reported as a dislocation.
+
+    The two are linked by a constant — sqrt(2/pi) — for any spot, IV and
+    tenor, so a gap between them is never a modelling disagreement. Measured
+    live it was 0.73%; 8% is loose enough to absorb a wide ATM book and tight
+    enough that a stale IV shows up.
+    """
 
 
 class RegimeEngineConfig(_Config):
