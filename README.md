@@ -34,24 +34,35 @@ switch, and the engine must never require it to exist.
 | Analysis pipeline (`brain/pipeline.py`) | **Implemented** — spec §33 flow, MarketState → ranked contracts |
 | Failure contract (§29) | **Implemented** — explicit domain→action mapping (`risk/failure_policy.py`) |
 | `IntelligenceProvider` / `DeterministicProvider` / agent tools | **Implemented** — the deterministic provider is the always-on default |
-| Risk Engine | Interface only (`risk/risk_engine.py`) |
-| Execution gate / order manager / broker adapter | Interface only (`execution/`) |
+| Risk Engine | **Implemented** — authoritative sizing from four budgets, fail-closed, no override path |
+| Black-Scholes pricing / greeks (`analytics/`) | **Implemented** — production, because no Indian feed publishes greeks |
+| **Live NSE adapter** (`data/adapters/nse_public.py`) | **Implemented** — index, expiries, full chain, India VIX |
+| Live bar aggregator (`data/bar_aggregator.py`) | **Implemented** — builds bars from snapshots; NSE serves no history |
+| Provider registry (`data/providers.py`) | **Implemented** — 11 providers, 1 with an adapter, the rest labelled |
+| Execution Gate | **Implemented** — 16 blocking checks re-validated against the live market, no override path |
+| Order manager / broker adapter | Interface only (`execution/`) |
 | Feedback / learning engines | Interface only (`feedback/`) |
 | Memory (Postgres repository, Redis cache) | Interface only (`memory/`) |
 | Backtest/replay engine | Interface only (`backtest/`) |
 | Database schema | `Base` + UUID/timestamp/version mixin only — the ~27 tables from §27 are not yet modeled |
-| FastAPI app | Minimal — `/health` only |
+| FastAPI app + operations console | **Implemented** — live status/providers/market/analysis endpoints, `docs/console.html` |
 
-338 tests pass; `ruff` and `mypy --strict` are clean.
+755 tests pass; `ruff` and `mypy --strict` are clean.
 
 ### Where the pipeline deliberately stops
 
-`QuantitativeBrain.run()` ends at **ranked strike candidates**. It does not
-construct a `TradeDecision`, because that would require inventing a
-`RiskDecision` — and a fabricated risk approval is exactly the
-placeholder-as-production that spec §36 prohibits.
-`BrainCycleResult.is_actionable` means "a candidate survived analysis", never
-"this is authorized".
+The chain now runs end to end: `MarketState` → analysis → ranked structure →
+`TradeCandidate` → `RiskDecision` → `TradeDecision` → Execution Gate →
+`OrderRequest`. What it cannot do is **send** one, because no broker adapter
+exists.
+
+That boundary is enforced rather than documented. `QuantitativeBrain.run()`
+only reaches risk when given an account and a portfolio, and without a broker
+there is no account to give it — so `is_actionable` ("a candidate survived
+analysis") stays distinct from `is_authorized` ("risk approved a size"), and
+the second is currently always false. Inventing an account balance to make an
+execution panel look populated is the single most dangerous placeholder
+available in this system, and the API says "no broker connected" instead.
 
 ## Design decisions worth knowing
 
@@ -95,42 +106,101 @@ stamped from `MarketState.timestamp` so BACKTEST and REPLAY stay reproducible
 `brain/config.py`, injected per brain — which is what a Learning Engine
 proposal (spec §20) would eventually version.
 
-## Operations console design
+## Operations console
 
-`docs/console-design.html` is a self-contained design for the operating
-surface: every broker and data-feed connection option with its capability
-coverage, credential shape and token lifetime; the run-mode / LLM / kill-switch
-controls; and the brain's current decision chain through to the execution gate.
-Open it directly in a browser.
+`docs/console.html`, served at `/` by the FastAPI app. Start the app and open
+it; it reads `/api/status`, `/api/providers`, `/api/market/{symbol}` and
+`/api/analysis/{symbol}`.
 
-Two findings from building the connection matrix are worth stating here,
-because they shape the adapter work:
+**It contains no market figures of its own.** There is no sample payload and
+no placeholder number in the markup — a test asserts that no real session's
+figures have been pasted in. A value the API does not supply renders as an
+explicit "not published"; a backend that cannot be reached renders a banner
+saying so. A console showing plausible sample numbers is worse than one
+showing none, because the first is indistinguishable from a working system.
 
-- **No Indian broker API returns Greeks.** NSE's chain endpoint publishes
-  implied volatility but no sensitivities. Delta, gamma, theta and vega are
-  therefore computed in-process — which is why the Strike Engine can rank on
-  delta fit at all.
-- **Token lifetime is an architectural constraint, not a detail.** Most broker
-  tokens expire at the next login window, so an unattended engine needs either
-  a long-lived token or a login that can be scripted from a stored TOTP secret.
+Connections are a **dropdown**, not a matrix. An operator connects one
+provider at a time, so only the selected provider's capabilities, credential
+fields and caveats are shown. The list is grouped into "connectable now" and
+"planned — no adapter yet", and capability chips render in three visually
+distinct states:
 
-The numbers shown in that page are a real run of the implemented pipeline
-against the simulator, not illustrative placeholders.
+- **verified** — a live call for it returned data
+- **claimed** — declared by the provider's documentation, not yet proven
+- **absent** — not served at all
+
+That distinction is the point. Exactly one provider is implemented, and its
+four capabilities were probed against the live endpoint; every other entry's
+capability list is read off published documentation and is labelled as
+unverified. A documented capability is a claim and a probed one is a fact, and
+a trading system must not treat them alike.
+
+### What the live feed actually serves
+
+Probed against NSE's public API, not assumed:
+
+| | |
+|---|---|
+| Index OHLC + previous close | works |
+| India VIX | works (same request as the index) |
+| Expiry list | works — weeklies are **Tuesdays**, not Thursdays |
+| Full option chain: LTP, top-of-book, IV, OI, ΔOI, volume | works |
+| Option greeks | **not published** — computed from premium and IV |
+| Historical bars | **blocked** — the history endpoint serves an anti-bot page |
+| Constituent quotes | **404** — index breadth needs another provider |
+| Account / orders | not a broker |
+
+Two consequences shaped the design:
+
+- **Greeks are computed in-process** (`analytics/pricing.py`), which is why
+  the Strike Engine can rank on delta fit at all.
+- **Bars are aggregated from live snapshots** (`data/bar_aggregator.py`)
+  until a broker adapter supplies history. With no bars there is no measured
+  structure, and the Regime Engine correctly refuses to classify one — live,
+  it reports UNCERTAIN with the reason.
+
+### Implied volatility is marked to the book, not the last trade
+
+NSE computes its published IV from the last traded price, and on a thin strike
+that is a real problem. Measured on one live snapshot: the 22,900 CE published
+**46.55%** IV off a trade at 1,190 while its book stood at 965.20/1,082.25 —
+an IV that would have given the strike a delta of 0.78 and an enormous vega,
+competing with genuine candidates in strike ranking. Meanwhile the 23,600 CE
+had a book 1.20 wide on a 344 mid and NSE published **no** IV for it at all.
+
+So the adapter marks to the mid of a book tight enough to mean something,
+falls back to NSE's figure only when there is no markable book, and otherwise
+reports nothing. Of 166 live legs that yields 113 with a usable IV and 53
+honestly unmarkable, with near-ATM delta monotonic in strike across a 7–12%
+smile. `prefer_published_iv=True` passes NSE's own numbers through for
+reconciling against nseindia.com.
+
+### Palette
+
+`--up #55CE9A` / `--down #BC404C` are lightness-split on purpose: that split
+earns a deuteranopia separation of ΔE 21 where a naive green/red pair scores
+ΔE 7. Brass means "you must act", cyan means "live data", and there is
+deliberately no yellow warning state because it would collide with brass.
+India VIX is deliberately **not** coloured up/down — a falling VIX in green
+beside a falling index in red reads as the two moving opposite ways, so its
+direction is named in words instead.
 
 ## Repository layout
 
 ```
 index_option_brain/
-├── app/            FastAPI app factory
+├── app/            FastAPI app, live engine, console API
 ├── config/         Settings (LLM_ENABLED, RUN_MODE, DB/Redis URLs)
 ├── contracts/       Canonical Pydantic data contracts (spec §2-21)
-├── data/adapters/   Provider-agnostic adapter interfaces + simulator
+├── analytics/       Black-Scholes pricing and greeks (production)
+├── data/adapters/   Adapter interfaces, the live NSE adapter, the simulator
+├── data/            HTTP seam, bar aggregator, provider registry
 ├── state/           Market-state engine (assembles MarketState)
 ├── events/          Trigger engine + significance filter (interfaces)
 ├── brain/           indicators, config, structures, the nine brains,
 │                     position brain, and the analysis pipeline
-├── risk/            Risk engine (interface) + failure policy (implemented)
-├── execution/       Execution gate / order manager / broker adapter (interfaces)
+├── risk/            Risk engine, limits, margin model, failure policy
+├── execution/       Execution gate (implemented); order manager, broker (interfaces)
 ├── agent/           IntelligenceProvider, DeterministicProvider, agent tools
 ├── memory/          Postgres repository + Redis cache (interfaces)
 ├── feedback/        Feedback + learning engines (interfaces)
@@ -154,6 +224,44 @@ python3.12 -m venv .venv
 
 Copy `.env.example` to `.env` and adjust as needed. `LLM_ENABLED` defaults
 to `false` and `RUN_MODE` defaults to `paper`.
+
+### Running against the live feed
+
+```bash
+# Probe what NSE is serving right now, with every line measured.
+.venv/bin/python scripts/live_nse_check.py NIFTY
+
+# Start the API and open the console at http://127.0.0.1:8000/
+.venv/bin/uvicorn index_option_brain.app.main:app
+```
+
+```python
+import asyncio
+from index_option_brain.brain import QuantitativeBrain
+from index_option_brain.contracts.enums import BarInterval
+from index_option_brain.data.adapters.nse_public import NsePublicAdapter
+from index_option_brain.data.bar_aggregator import AggregatingIndexAdapter
+from index_option_brain.state import InMemoryIvHistoryStore, MarketStateBuilder
+
+async def main():
+    async with NsePublicAdapter() as nse:
+        # NSE serves no history, so it is wrapped: every snapshot read for
+        # analysis doubles as a bar observation.
+        index = AggregatingIndexAdapter(nse, intervals=(BarInterval.MINUTE_5, BarInterval.DAY))
+        # `None` for constituents: no connected provider serves index breadth,
+        # and the parameter has no default so the gap has to be stated.
+        builder = MarketStateBuilder(index, None, nse, nse, InMemoryIvHistoryStore())
+        state = await builder.build("NIFTY")
+
+        result = QuantitativeBrain().run(state)
+        print(result.regime.regime, result.signal.direction, result.selected_strategy)
+
+asyncio.run(main())
+```
+
+On a cold start this prints `UNCERTAIN neutral NO_TRADE`, because there are no
+bars yet and therefore no measured structure. That is the correct answer, not
+a failure — leave the process running and the aggregator fills the history in.
 
 ### Running the brain against simulated data
 
@@ -183,19 +291,29 @@ heavyweight-driven rallies and assert the brains read them correctly.
 
 ## Next steps
 
-1. **Risk Engine** — the first stage that must be genuinely hardened
-   (spec §32: "Risk and execution modules require especially strong
-   coverage"). Position sizing, exposure, daily loss limits, concentration.
-2. **Execution gate + order manager + a real broker adapter** (provider TBD —
-   the adapters are provider-agnostic by design).
-3. **Event/trigger engine** — real detection over consecutive MarketState
+1. **A broker adapter.** The one thing standing between analysis and trading,
+   and it also closes two data gaps: historical bars (which unblocks the
+   Regime Engine) and an account (which unblocks the Risk Engine). Dhan's
+   long-lived token or Angel One's TOTP login suit an unattended process
+   better than the daily browser login the OAuth brokers require.
+2. **Order manager** (§17) — the state machine behind the Execution Gate,
+   honouring `OrderRequest.sequence` so the protective leg goes first, and
+   reconciling fills back to the thesis.
+3. **Event/trigger engine** — real detection over consecutive `MarketState`
    snapshots, plus the significance filter.
 4. **Postgres schema** for spec §27, then the feedback/learning pipeline.
-5. **Backtest/replay engine** — the brains are already deterministic and
-   clock-independent, so this is mostly a data-source and simulated-fill
-   exercise.
+5. **Backtest/replay engine** — the brains, the Risk Engine and the Execution
+   Gate are all deterministic and clock-independent already, so this is mostly
+   a data-source and simulated-fill exercise.
 6. Optional `AIProvider` behind `IntelligenceProvider`, once there is
    something substantial for it to investigate.
+
+### One number worth knowing before funding an account
+
+At the default 1% risk-per-trade, a NIFTY put credit spread with a per-lot max
+loss of about ₹11,835 needs roughly **₹12 lakh** of equity before the Risk
+Engine will authorize a single lot. Below that, `BELOW_MINIMUM_SIZE` is the
+correct and permanent answer.
 
 ## Source spec
 
