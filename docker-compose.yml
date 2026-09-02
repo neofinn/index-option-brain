@@ -1,67 +1,37 @@
-# Always-on deployment with the console reachable only from your tailnet.
+# The engine and console.
 #
 #   docker compose up -d
 #
-# The brain container publishes no host port. Its only route in is the
-# Tailscale sidecar, which shares its network namespace — so the console is
-# reachable at https://<machine>.<your-tailnet>.ts.net and from nowhere else.
-# That matters more than usual here: this process will hold broker
-# credentials, and a trading console on the public internet is a target.
-#
-# Set TS_AUTHKEY in .env from an ephemeral, pre-authorized, tagged auth key.
+# Bound to loopback, never to 0.0.0.0. Exposure is Tailscale's job — either
+# `tailscale serve` on the host (what deploy/cloud-init.yaml sets up, and the
+# recommended path) or the sidecar in docker-compose.tailscale.yml. Neither
+# puts a port on a public interface, which matters because this process holds
+# broker credentials once one is connected.
 
 services:
-  tailscale:
-    image: tailscale/tailscale:stable
-    container_name: index-brain-ts
-    hostname: ${TS_HOSTNAME:-index-brain}
-    restart: unless-stopped
-    environment:
-      TS_AUTHKEY: ${TS_AUTHKEY:?set TS_AUTHKEY in .env}
-      TS_STATE_DIR: /var/lib/tailscale
-      TS_USERSPACE: "false"
-      # Terminates TLS with a cert from your tailnet and proxies to the app.
-      # `serve` is tailnet-only. `funnel` would put it on the public internet
-      # — see deploy/README.md before considering that.
-      TS_SERVE_CONFIG: /config/serve.json
-      TS_EXTRA_ARGS: --advertise-tags=${TS_TAGS:-tag:index-brain}
-    volumes:
-      - tailscale-state:/var/lib/tailscale
-      - ./deploy/tailscale-serve.json:/config/serve.json:ro
-    devices:
-      - /dev/net/tun:/dev/net/tun
-    cap_add:
-      - NET_ADMIN
-      - SYS_MODULE
-    healthcheck:
-      test: ["CMD", "tailscale", "status", "--json"]
-      interval: 60s
-      timeout: 10s
-      retries: 3
-
   brain:
     build: .
+    image: index-option-brain:local
     container_name: index-brain
     restart: unless-stopped
-    # Shares the sidecar's network stack, which is what lets Tailscale reach
-    # 127.0.0.1:8000 without the app being exposed on the host at all.
-    network_mode: service:tailscale
-    depends_on:
-      tailscale:
-        condition: service_started
+    ports:
+      # Loopback only. `tailscale serve` proxies to this.
+      - "127.0.0.1:8000:8000"
     env_file:
       - .env
     environment:
       LLM_ENABLED: ${LLM_ENABLED:-false}
       RUN_MODE: ${RUN_MODE:-paper}
+      BAR_STORE_DIR: /app/var/bars
     # Read-only root with a tmpfs for scratch: nothing in this image needs to
-    # write to disk, and a process holding credentials should not be able to.
+    # write outside the bar store, and a process holding credentials should
+    # not be able to.
     read_only: true
     tmpfs:
       - /tmp
     volumes:
-      # Observed bars, so a restart does not go blind for a session. The root
-      # filesystem is read-only, so this is the one writable path.
+      # Observed bars, so a restart does not go blind for a session. NSE
+      # serves no history, so this history is uptime.
       - ./var:/app/var
     security_opt:
       - no-new-privileges:true
@@ -70,6 +40,3 @@ services:
       options:
         max-size: "10m"
         max-file: "5"
-
-volumes:
-  tailscale-state:

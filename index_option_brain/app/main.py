@@ -17,6 +17,7 @@ Genuine server faults still surface as 500s.
 
 from __future__ import annotations
 
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from decimal import Decimal
@@ -40,7 +41,27 @@ from index_option_brain.data.providers import (
     verified_providers,
 )
 
-CONSOLE_HTML = Path(__file__).resolve().parents[2] / "docs" / "console.html"
+
+def _console_path() -> Path:
+    """Where the console lives, in every install mode.
+
+    It ships **inside the package** rather than beside it. The earlier
+    repo-relative path worked in a checkout and broke the moment the package
+    was pip-installed — `parents[2]` then lands in site-packages, so the
+    container built by the Dockerfile served a 404 for its own front page.
+    That is the deployment this project recommends, so it was the one place
+    the path had to be right.
+
+    `CONSOLE_HTML` overrides it, for serving a modified copy without
+    rebuilding the image.
+    """
+    override = os.environ.get("CONSOLE_HTML")
+    if override:
+        return Path(override)
+    return Path(__file__).resolve().parent / "static" / "console.html"
+
+
+CONSOLE_HTML = _console_path()
 
 
 def _capability_names(capabilities: frozenset[Capability]) -> list[str]:

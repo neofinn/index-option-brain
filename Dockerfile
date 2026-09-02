@@ -35,8 +35,9 @@ RUN apt-get update \
 
 COPY --from=builder /opt/venv /opt/venv
 WORKDIR /app
+# The console ships inside the package, so there is nothing else to copy
+# for the web front end.
 COPY --chown=brain:brain index_option_brain/ index_option_brain/
-COPY --chown=brain:brain docs/ docs/
 COPY --chown=brain:brain scripts/ scripts/
 
 # Never root. This process holds broker credentials once one is connected.

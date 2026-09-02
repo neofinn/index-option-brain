@@ -1,0 +1,48 @@
+# Fully-containerised alternative: Tailscale as a sidecar rather than on the
+# host. Use it when you would rather not install anything on the host at all.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.tailscale.yml up -d
+#
+# The brain then publishes no host port whatsoever — it shares the sidecar's
+# network namespace, so Tailscale can reach 127.0.0.1:8000 while nothing is
+# bound on the host. Set TS_AUTHKEY in .env from an ephemeral, pre-authorized,
+# tagged auth key.
+
+services:
+  tailscale:
+    image: tailscale/tailscale:stable
+    container_name: index-brain-ts
+    hostname: ${TS_HOSTNAME:-index-brain}
+    restart: unless-stopped
+    environment:
+      TS_AUTHKEY: ${TS_AUTHKEY:?set TS_AUTHKEY in .env}
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_USERSPACE: "false"
+      # `serve` is tailnet-only. `funnel` would put it on the public
+      # internet — see deploy/README.md before considering that.
+      TS_SERVE_CONFIG: /config/serve.json
+      TS_EXTRA_ARGS: --advertise-tags=${TS_TAGS:-tag:index-brain}
+    volumes:
+      - tailscale-state:/var/lib/tailscale
+      - ./deploy/tailscale-serve.json:/config/serve.json:ro
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    healthcheck:
+      test: ["CMD", "tailscale", "status", "--json"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+
+  brain:
+    # No host port at all in this mode.
+    ports: !reset []
+    network_mode: service:tailscale
+    depends_on:
+      tailscale:
+        condition: service_started
+
+volumes:
+  tailscale-state:

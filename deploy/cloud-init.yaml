@@ -1,0 +1,129 @@
+#cloud-config
+# Paste this whole file into your provider's "user data" / "cloud-init" box
+# when creating the server. Fill in the two values marked FILL IN below first.
+# Nothing else is required: the machine installs everything, joins your
+# tailnet, starts the engine, and keeps itself updated from the repository.
+#
+# There is no SSH key here and no password login. The only way in is your
+# tailnet, which is the point — a box holding broker credentials should not be
+# reachable from the internet at all, including by you.
+#
+# Verify it worked by opening https://index-brain.<your-tailnet>.ts.net
+# from any device signed into your tailnet, a few minutes after boot.
+
+write_files:
+  # ---------------------------------------------------------------- FILL IN
+  - path: /opt/index-option-brain-bootstrap.env
+    permissions: "0600"
+    content: |
+      # An ephemeral, pre-authorized, REUSABLE, TAGGED auth key from
+      # https://login.tailscale.com/admin/settings/keys
+      # Tagged so the node is owned by the tag rather than by your account —
+      # an untagged node expires with your key and the console silently drops
+      # off the tailnet months later.
+      TS_AUTHKEY=FILL_IN_YOUR_TAILSCALE_AUTH_KEY
+
+      # The name the console answers on:
+      #   https://<TS_HOSTNAME>.<your-tailnet>.ts.net
+      TS_HOSTNAME=index-brain
+
+      # Which branch the machine tracks and auto-deploys.
+      DEPLOY_BRANCH=main
+  # -------------------------------------------------------------------------
+
+  - path: /opt/bootstrap.sh
+    permissions: "0755"
+    content: |
+      #!/usr/bin/env bash
+      set -Eeuo pipefail
+      exec > >(tee -a /var/log/index-brain-bootstrap.log) 2>&1
+      echo "=== bootstrap starting $(date -Is) ==="
+
+      source /opt/index-option-brain-bootstrap.env
+
+      if [[ "$TS_AUTHKEY" == FILL_IN* ]]; then
+          echo "FATAL: TS_AUTHKEY was not filled in. Without it the machine"
+          echo "would have no way to be reached, so bootstrap stops here"
+          echo "rather than leaving a running trading box unreachable."
+          exit 1
+      fi
+
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get update -y
+      apt-get install -y --no-install-recommends \
+          ca-certificates curl git gnupg ufw unattended-upgrades
+
+      # --- Docker ---------------------------------------------------------
+      install -m 0755 -d /etc/apt/keyrings
+      curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+          | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+      chmod a+r /etc/apt/keyrings/docker.gpg
+      echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
+      https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
+          > /etc/apt/sources.list.d/docker.list
+      apt-get update -y
+      apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+      systemctl enable --now docker
+
+      # --- Firewall: nothing inbound except over the tailnet ---------------
+      # Belt and braces. The app already binds loopback only, but a box that
+      # will hold broker credentials should not depend on one layer for that.
+      ufw default deny incoming
+      ufw default allow outgoing
+      ufw allow in on tailscale0
+      ufw --force enable
+
+      # --- Tailscale ------------------------------------------------------
+      curl -fsSL https://tailscale.com/install.sh | sh
+      tailscale up \
+          --authkey="$TS_AUTHKEY" \
+          --hostname="$TS_HOSTNAME" \
+          --ssh \
+          --accept-dns=false
+
+      # --- The application -------------------------------------------------
+      git clone --branch "$DEPLOY_BRANCH" \
+          https://github.com/neofinn/index-option-brain /opt/index-option-brain
+      cd /opt/index-option-brain
+      mkdir -p var/bars
+
+      cat > .env <<ENVFILE
+      # The deterministic brain is the mandatory decision path, so the LLM
+      # layer stays off unless deliberately enabled (spec §23, §35).
+      LLM_ENABLED=false
+      # Stays paper until a broker is connected AND its response mapping has
+      # been verified. There is nothing for 'live' to place an order through.
+      RUN_MODE=paper
+      KILL_SWITCH_ENABLED=false
+      BAR_STORE_DIR=/app/var/bars
+      DEPLOY_BRANCH=$DEPLOY_BRANCH
+      ENVFILE
+      chmod 600 .env
+
+      docker compose up -d --build
+
+      # --- Serve it on the tailnet, and only there -------------------------
+      # `serve` is tailnet-only. `funnel` would publish it to the internet;
+      # there is no authentication in front of this console, because none was
+      # needed for a tailnet-only surface.
+      tailscale serve --bg --https=443 http://127.0.0.1:8000
+
+      # --- Keep itself current ---------------------------------------------
+      install -m 0644 deploy/index-brain-update.service /etc/systemd/system/
+      install -m 0644 deploy/index-brain-update.timer /etc/systemd/system/
+      systemctl daemon-reload
+      systemctl enable --now index-brain-update.timer
+
+      # Unattended security updates, since nobody is going to log in and
+      # apply them.
+      dpkg-reconfigure -f noninteractive unattended-upgrades
+
+      echo "=== bootstrap complete $(date -Is) ==="
+      echo "Console: https://${TS_HOSTNAME}.<your-tailnet>.ts.net"
+      tailscale status || true
+
+runcmd:
+  - [ bash, /opt/bootstrap.sh ]
+
+package_update: true
+package_upgrade: true

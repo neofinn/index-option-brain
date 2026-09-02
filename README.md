@@ -51,9 +51,9 @@ switch, and the engine must never require it to exist.
 | Memory (Postgres repository, Redis cache) | Interface only (`memory/`) |
 | Backtest/replay engine | Interface only (`backtest/`) |
 | Database schema | `Base` + UUID/timestamp/version mixin only — the ~27 tables from §27 are not yet modeled |
-| FastAPI app + operations console | **Implemented** — live status/providers/market/analysis endpoints, `docs/console.html` |
+| FastAPI app + operations console | **Implemented** — live status/providers/market/analysis endpoints, `index_option_brain/app/static/console.html` |
 
-1,029 tests pass; `ruff` and `mypy --strict` are clean.
+1,032 tests pass; `ruff` and `mypy --strict` are clean.
 
 ### Where the pipeline deliberately stops
 
@@ -114,6 +114,15 @@ proposal (spec §20) would eventually version.
 
 ## Running it always-on
 
+**A 2 GB / 1 vCPU VPS is enough** — measured peak is 210 MB after a full live
+cycle. `deploy/cloud-init.yaml` is pasted into a provider's user-data box at
+creation: the machine then installs Docker and Tailscale, clones the repo,
+starts the engine, serves the console on your tailnet only, and installs a
+ten-minute self-update timer that pulls the tracked branch and **rolls back
+if the new commit does not become ready**. No SSH key, no password login, no
+inbound port — administration happens by pushing to the repository. See
+`deploy/README.md`.
+
 The engine has to run continuously, not on page load: NSE serves no history,
 so the only source of bars is the aggregator observing snapshots as the
 session proceeds. `app/runner.py` polls on a loop, feeds each snapshot to the
@@ -134,7 +143,7 @@ looks identical to a healthy one from `/health`.
 
 ## Operations console
 
-`docs/console.html`, served at `/` by the FastAPI app. Start the app and open
+`index_option_brain/app/static/console.html`, served at `/` by the FastAPI app. Start the app and open
 it; it reads `/api/status`, `/api/providers`, `/api/market/{symbol}` and
 `/api/analysis/{symbol}`.
 

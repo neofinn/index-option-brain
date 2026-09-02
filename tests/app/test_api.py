@@ -12,6 +12,9 @@ this system is built to avoid.
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -286,3 +289,39 @@ class TestConsolePage:
     def test_the_page_states_that_its_figures_are_live(self, client: TestClient):
         html = client.get("/").text
         assert "Nothing is sampled or simulated" in html
+
+
+class TestConsoleIsFoundWhenInstalled:
+    """A regression pin on a bug the Dockerfile would have shipped.
+
+    The console path was resolved relative to the repository root, which works
+    in a checkout and breaks the moment the package is pip-installed — the
+    path then lands in `site-packages/docs/`, so the container built by this
+    project's own Dockerfile served a 404 for its own front page. It now ships
+    as package data, next to the code, which resolves in every install mode.
+    """
+
+    def test_the_console_lives_inside_the_package(self):
+        import index_option_brain
+        from index_option_brain.app.main import CONSOLE_HTML
+
+        package_root = Path(index_option_brain.__file__).resolve().parent
+        assert CONSOLE_HTML.exists()
+        assert package_root in CONSOLE_HTML.parents
+
+    def test_it_is_not_resolved_relative_to_the_repository(self):
+        """The specific mistake: a path that only exists in a checkout."""
+        from index_option_brain.app.main import CONSOLE_HTML
+
+        assert "docs" not in CONSOLE_HTML.parts
+
+    def test_the_path_can_be_overridden(self, tmp_path):
+        """For serving a modified copy without rebuilding the image."""
+        from index_option_brain.app.main import _console_path
+
+        custom = tmp_path / "mine.html"
+        os.environ["CONSOLE_HTML"] = str(custom)
+        try:
+            assert _console_path() == custom
+        finally:
+            del os.environ["CONSOLE_HTML"]
