@@ -25,7 +25,15 @@ class IndexSpec(BaseModel):
     name: str
     lot_size: int
     tick_size: Decimal
-    strike_step: Decimal = Decimal(50)
+    strike_step: Decimal | None = Decimal(50)
+    """Gap between adjacent listed strikes, or None when it is not uniform.
+
+    Nullable because some venues list irregularly — Delta Exchange's BTC
+    options step by 200 near the money and widen further out. A single
+    assumed step there would place strikes that do not exist, which fails at
+    order time rather than at selection time. The 50 default is NIFTY's and
+    is kept so existing callers are unaffected.
+    """
 
 
 class Bar(BaseModel):
@@ -142,6 +150,16 @@ class OptionQuote(BaseModel):
     open_interest_change: int
     implied_volatility: Decimal | None
     greeks: Greeks | None = None
+    contract_multiplier: Decimal = Decimal(1)
+    """Units of the underlying per contract, where the venue quotes per unit.
+
+    1 on NSE, where a premium of 90 is 90 rupees and `lot_size` carries the
+    scaling. On Delta Exchange a BTC option's premium of 1,339 is USD per
+    BTC and one contract is `contract_value` = 0.001 of it, so the same
+    quote is 1.34 per contract. Carried on the quote so the multiplier
+    cannot be separated from the price it applies to — putting them in
+    different objects is how a notional ends up 1,000x wrong.
+    """
 
     @property
     def mid(self) -> Decimal:

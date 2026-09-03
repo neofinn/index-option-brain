@@ -507,6 +507,19 @@ class DeterministicExecutionGate(ExecutionGate):
 
         if contract.strike <= 0:
             fail(ExecutionCheck.STRIKE_VALID, f"Leg {key} has a non-positive strike")
+        elif spec.strike_step is None:
+            # No uniform step, so listedness cannot be verified this way —
+            # some venues widen the ladder away from the money. The check
+            # fails rather than passing: this gate is the last thing between
+            # a decision and a live order, and "could not verify" must not
+            # render as "verified". A venue with an irregular ladder needs
+            # the strike checked against the actual instrument list.
+            fail(
+                ExecutionCheck.STRIKE_VALID,
+                f"Leg {key} cannot be verified as a listed strike: "
+                f"{spec.symbol} publishes no uniform strike step, so a "
+                "multiple-of-step test says nothing",
+            )
         elif spec.strike_step > 0 and contract.strike % spec.strike_step != 0:
             fail(
                 ExecutionCheck.STRIKE_VALID,

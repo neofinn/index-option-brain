@@ -440,6 +440,11 @@ class SimulatorDataAdapter(
     async def get_option_chain(self, underlying_symbol: str, expiry: date) -> list[OptionQuote]:
         spec = await self.get_index_spec(underlying_symbol)
         spot = self._spot
+        if spec.strike_step is None:
+            raise ValueError(
+                f"The simulator needs a strike step for {spec.symbol} and the "
+                "spec carries none; it cannot invent a strike ladder."
+            )
         step = float(spec.strike_step)
         atm = round(spot / step) * step
         years, days = self._time_to_expiry(expiry)
@@ -497,7 +502,12 @@ class SimulatorDataAdapter(
         # Open interest peaks at ATM and again at round-number strikes, which
         # is what creates the call/put walls the Options Brain looks for.
         atm_proximity = math.exp(-((strike - spot) / (spot * 0.02)) ** 2)
-        round_bonus = 2.4 if strike % (float(spec.strike_step) * 10) == 0 else 1.0
+        round_bonus = (
+            2.4
+            if spec.strike_step is not None
+            and strike % (float(spec.strike_step) * 10) == 0
+            else 1.0
+        )
         side_bias = 1.15 if option_type is OptionType.PE and strike < spot else 1.0
         if option_type is OptionType.CE and strike > spot:
             side_bias = 1.1

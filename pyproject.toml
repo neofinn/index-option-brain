@@ -23,6 +23,11 @@ dependencies = [
     "numpy>=1.26",
     "pandas>=2.2",
     "scipy>=1.13",
+    # Delta Exchange India client. Synchronous requests-based, so adapter
+    # calls run in a thread executor; it also does not declare requests as
+    # a dependency of its own, hence the explicit entry below.
+    "delta-rest-client>=1.0.14",
+    "requests>=2.32",
     "httpx>=0.27",
 ]
 
