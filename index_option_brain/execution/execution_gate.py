@@ -508,18 +508,24 @@ class DeterministicExecutionGate(ExecutionGate):
         if contract.strike <= 0:
             fail(ExecutionCheck.STRIKE_VALID, f"Leg {key} has a non-positive strike")
         elif spec.strike_step is None:
-            # No uniform step, so listedness cannot be verified this way —
-            # some venues widen the ladder away from the money. The check
-            # fails rather than passing: this gate is the last thing between
-            # a decision and a live order, and "could not verify" must not
-            # render as "verified". A venue with an irregular ladder needs
-            # the strike checked against the actual instrument list.
-            fail(
-                ExecutionCheck.STRIKE_VALID,
-                f"Leg {key} cannot be verified as a listed strike: "
-                f"{spec.symbol} publishes no uniform strike step, so a "
-                "multiple-of-step test says nothing",
-            )
+            # No uniform step to test against — Delta Exchange's BTC ladder
+            # steps by 200 near the money and widens further out.
+            #
+            # This is not an unverified strike. INSTRUMENT_VALID above
+            # already failed the leg if it is absent from the live chain,
+            # and membership in the chain the gate just read is a *stronger*
+            # statement than being a multiple of a step: a strike can satisfy
+            # the arithmetic and still not be listed. The modulo test is a
+            # cheap secondary sanity check for venues that publish a uniform
+            # ladder, so its absence costs nothing here.
+            #
+            # An earlier version of this branch failed the check instead, on
+            # the reasoning that "could not verify" must not read as
+            # "verified". The reasoning was right and the premise was wrong:
+            # verification had already happened one check earlier, so the
+            # failure rejected every irregular-ladder venue for no safety
+            # gain at all.
+            pass
         elif spec.strike_step > 0 and contract.strike % spec.strike_step != 0:
             fail(
                 ExecutionCheck.STRIKE_VALID,
