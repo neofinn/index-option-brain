@@ -27,6 +27,7 @@ from decimal import Decimal
 from typing import Any, TypeVar
 
 from index_option_brain.brain.pipeline import BrainCycleResult, QuantitativeBrain
+from index_option_brain.capture import CaptureRecorder
 from index_option_brain.contracts.enums import BarInterval, MarketSessionState
 from index_option_brain.contracts.market_state import MarketState
 from index_option_brain.contracts.provider import (
@@ -94,6 +95,13 @@ class LiveEngine:
     so with no daily history it reports 0.00 and the Regime Engine's coverage
     gate — correctly — refuses to classify anything. 60 clears the 30-bar
     floor with room for the holidays inside any given quarter.
+    """
+    capture: CaptureRecorder | None = None
+    """Records what is observed, so uptime becomes backtest corpus.
+
+    None disables capture entirely. Nothing here reads back into a decision,
+    so a capture failure costs history and never a trade — see
+    `capture/recorder.py`.
     """
     archive: NseArchiveAdapter | None = None
     """History source for the daily seed.
@@ -361,7 +369,31 @@ class LiveEngine:
         if cached is not None:
             return cached
         state = await self.market_state(symbol)
-        return self._store(f"analysis:{symbol}", self._brain.run(state))
+        result = self._brain.run(state)
+        if self.capture is not None:
+            # Deliberately after the brain has run and before the result is
+            # returned: the capture must never sit between the feed and a
+            # decision, and it must never be able to fail one.
+            await self.capture.record(result)
+        return self._store(f"analysis:{symbol}", result)
+
+    async def capture_status(self, symbol: str) -> dict[str, Any]:
+        """What the capture has recorded, and whether it is working.
+
+        Reported rather than assumed: a capture that silently stopped looks
+        exactly like one with nothing to do, and one of those costs a year
+        of corpus that cannot be bought back.
+        """
+        if self.capture is None:
+            return {
+                "enabled": False,
+                "reason": "No database configured, so nothing is being recorded",
+            }
+        return {
+            "enabled": True,
+            "stats": self.capture.stats.as_dict(),
+            "coverage": await self.capture.coverage(symbol),
+        }
 
     def bar_coverage(self, symbol: str) -> dict[str, Any]:
         """How much history has been observed, and whether it has holes.

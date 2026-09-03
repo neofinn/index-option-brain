@@ -322,6 +322,7 @@ def create_app(
                 "legs_unmarkable": len(chain) - len(with_greeks),
             },
             "bars": live.bar_coverage(symbol),
+            "capture": await live.capture_status(symbol),
             "breadth": {
                 "constituents": len(state.constituent_state.quotes),
                 "available": bool(state.constituent_state.quotes),

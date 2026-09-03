@@ -16,6 +16,9 @@ dependencies = [
     "sqlalchemy>=2.0",
     "alembic>=1.13",
     "asyncpg>=0.29",
+    # SQLite is the zero-setup fallback so a fresh box starts persisting
+    # before anyone installs Postgres. Same schema, same code path.
+    "aiosqlite>=0.20",
     "redis>=5.0",
     "numpy>=1.26",
     "pandas>=2.2",
