@@ -200,7 +200,28 @@ class TestMarket:
         body = client.get("/api/market/NIFTY").json()
         assert body["breadth"]["available"] is False
         assert body["breadth"]["constituents"] == 0
-        assert "No connected provider" in body["breadth"]["reason"]
+        assert "pre-open" in body["breadth"]["reason"]
+        assert body["breadth"]["as_of"] is None
+
+    def test_breadth_carries_the_boards_own_timestamp_when_present(
+        self, client: TestClient
+    ):
+        """Breadth from the opening auction must date itself. A caller has to
+        be able to tell 09:07 breadth from breadth measured just now."""
+        body = client.get("/api/market/NIFTY").json()
+        if body["breadth"]["available"]:
+            assert body["breadth"]["as_of"] is not None
+
+    def test_an_unsolved_forward_is_null_with_a_reason(self, client: TestClient):
+        """Not zero. A basis of zero says the futures are flat to carry; no
+        basis says nobody looked."""
+        body = client.get("/api/market/NIFTY").json()
+        forward = body["forward"]
+        if forward["value"] is None:
+            assert forward["reason"]
+            assert forward["excess_basis"] is None
+        else:
+            assert forward["parity_strikes"] > 0
 
     def test_the_timestamp_is_the_feeds_own(self, client: TestClient):
         """Not the server's clock: a delayed snapshot must not look fresh."""

@@ -381,8 +381,32 @@
       <header><h2>Breadth</h2><div class="spacer"></div>
         <span class="pill idle" id="breadth-pill"><span id="breadth-state">—</span></span></header>
       <div class="big" id="breadth-count">—</div>
-      <div class="sub">constituents observed</div>
+      <div class="sub" id="breadth-sub">constituents observed</div>
+      <div class="rows" id="breadth-rows" hidden>
+        <div class="row"><span class="k">Advances</span><span class="v" id="breadth-adv">—</span></div>
+        <div class="row"><span class="k">Declines</span><span class="v" id="breadth-dec">—</span></div>
+        <div class="row"><span class="k">Weighted move</span><span class="v" id="breadth-move">—</span></div>
+        <div class="row"><span class="k">Weight coverage</span><span class="v" id="breadth-cov">—</span></div>
+        <div class="row"><span class="k">Leaders</span><span class="v" id="breadth-lead">—</span></div>
+        <div class="row"><span class="k">Laggards</span><span class="v" id="breadth-lag">—</span></div>
+      </div>
       <p class="empty" id="breadth-note"></p>
+    </section>
+
+    <section class="card">
+      <header><h2>Forward &amp; basis</h2><div class="spacer"></div>
+        <span class="pill idle" id="basis-pill"><span id="basis-state">—</span></span></header>
+      <div class="big" id="basis-excess">—</div>
+      <div class="sub">points beyond carry</div>
+      <div class="rows" id="basis-rows" hidden>
+        <div class="row"><span class="k">Forward</span><span class="v" id="fwd-value">—</span></div>
+        <div class="row"><span class="k">Basis vs spot</span><span class="v" id="fwd-basis">—</span></div>
+        <div class="row"><span class="k">Parity strikes</span><span class="v" id="fwd-strikes">—</span></div>
+        <div class="row"><span class="k">Max pain</span><span class="v" id="opt-maxpain">—</span></div>
+        <div class="row"><span class="k">Call walls</span><span class="v" id="opt-callwalls">—</span></div>
+        <div class="row"><span class="k">Put walls</span><span class="v" id="opt-putwalls">—</span></div>
+      </div>
+      <p class="empty" id="basis-note"></p>
     </section>
 
     <section class="card wide">
@@ -435,6 +459,14 @@ let STATUS = null;
 const fmt = (n, digits = 2) =>
   n === null || n === undefined ? null
     : n.toLocaleString("en-IN", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+
+const fmt2 = (n) => fmt(n, 2) ?? "not published";
+const fmt0 = (n) => fmt(n, 0) ?? "not published";
+const pct = (n) => (n === null || n === undefined ? "not published" : (n * 100).toFixed(0) + "%");
+/* A sign is carried explicitly: "+21.1" and "21.1" read differently when
+   the number is a basis or a breadth move. */
+const signed = (n, digits = 2) =>
+  n === null || n === undefined ? "not published" : (n > 0 ? "+" : "") + fmt(n, digits);
 
 /* A missing value is stated as missing. This is the single most
    important function on the page. */
@@ -695,6 +727,32 @@ function renderMarket(market) {
        breadth.available ? "observed" : "unavailable",
        breadth.available ? "ok" : "bad");
   $("breadth-note").textContent = breadth.reason || "";
+  // Breadth comes from the opening auction, so it dates itself. A reading
+  // measured at 09:07 must not look like one measured just now.
+  $("breadth-sub").textContent = breadth.as_of
+    ? "constituents, auction of " + breadth.as_of.slice(11, 19) + " IST"
+    : "constituents observed";
+
+  const fwd = market.forward;
+  const hasForward = fwd && fwd.value !== null;
+  $("basis-rows").hidden = !hasForward;
+  $("basis-note").textContent = hasForward ? "" : (fwd && fwd.reason) || "";
+  if (hasForward) {
+    // Excess over carry, not raw basis: carry is mechanical and says only
+    // what the rate and the days left are.
+    $("basis-excess").textContent = signed(fwd.excess_basis, 1);
+    $("basis-excess").className = "big " + (fwd.excess_basis > 0 ? "up" : fwd.excess_basis < 0 ? "down" : "");
+    $("fwd-value").textContent = fmt2(fwd.value);
+    $("fwd-basis").textContent = signed(fwd.basis, 2) + " vs spot";
+    $("fwd-strikes").textContent = fwd.parity_strikes;
+    pill("basis-pill", "basis-state",
+         fwd.excess_basis > 0 ? "premium to carry" : "discount to carry",
+         "ok");
+  } else {
+    $("basis-excess").textContent = "—";
+    $("basis-excess").className = "big";
+    pill("basis-pill", "basis-state", "not solved", "bad");
+  }
 
   $("foot-asof").textContent = "As of: " + market.as_of + " (from the feed, not this clock)";
   return true;
@@ -702,6 +760,24 @@ function renderMarket(market) {
 
 function renderAnalysis(analysis) {
   if (!analysis.available) return;
+
+  const brains = analysis.brains;
+  if (brains) {
+    const c = brains.constituents;
+    $("breadth-rows").hidden = c.coverage === 0;
+    if (c.coverage > 0) {
+      $("breadth-adv").textContent = c.advances;
+      $("breadth-dec").textContent = c.declines;
+      $("breadth-move").textContent = signed(c.weighted_change_pct, 2) + "%";
+      $("breadth-cov").textContent = pct(c.coverage);
+      $("breadth-lead").textContent = c.leaders.slice(0, 3).join(", ") || "—";
+      $("breadth-lag").textContent = c.laggards.slice(0, 3).join(", ") || "—";
+    }
+    const o = brains.options;
+    $("opt-maxpain").textContent = o.max_pain !== null ? fmt2(o.max_pain) : "not published";
+    $("opt-callwalls").textContent = o.call_walls.map(fmt0).join(" / ") || "—";
+    $("opt-putwalls").textContent = o.put_walls.map(fmt0).join(" / ") || "—";
+  }
 
   const regime = analysis.regime;
   $("regime").textContent = regime.type ? regime.type.replace(/_/g, " ") : "—";

@@ -325,10 +325,39 @@ def create_app(
             "breadth": {
                 "constituents": len(state.constituent_state.quotes),
                 "available": bool(state.constituent_state.quotes),
+                "as_of": (
+                    state.constituent_state.quotes[0].timestamp.isoformat()
+                    if state.constituent_state.quotes
+                    else None
+                ),
                 "reason": (
                     None
                     if state.constituent_state.quotes
-                    else "No connected provider serves index constituents"
+                    else (
+                        "The pre-open auction board is the only constituent feed "
+                        "NSE serves; it is stale outside the opening window"
+                    )
+                ),
+            },
+            "forward": {
+                "value": (
+                    float(options.forward) if options.forward is not None else None
+                ),
+                "basis": (
+                    float(options.forward_basis)
+                    if options.forward_basis is not None
+                    else None
+                ),
+                "excess_basis": (
+                    float(options.forward_excess_basis)
+                    if options.forward_excess_basis is not None
+                    else None
+                ),
+                "parity_strikes": options.forward_strikes_used,
+                "reason": (
+                    None
+                    if options.forward is not None
+                    else "No strike had a two-sided book on both legs"
                 ),
             },
         }
@@ -377,6 +406,66 @@ def create_app(
                 "unknowns": brief.unknowns,
                 "sources": brief.sources,
                 "provider": brief.provider,
+            },
+            "brains": {
+                "index": {
+                    "direction": str(result.analysis.index.direction),
+                    "confidence": result.analysis.index.confidence,
+                    "support": [float(x) for x in result.analysis.index.support_levels],
+                    "resistance": [
+                        float(x) for x in result.analysis.index.resistance_levels
+                    ],
+                    "evidence": list(result.analysis.index.evidence),
+                },
+                "constituents": {
+                    "advances": result.analysis.constituents.advances,
+                    "declines": result.analysis.constituents.declines,
+                    "unchanged": result.analysis.constituents.unchanged,
+                    "breadth_score": result.analysis.constituents.breadth_score,
+                    "weighted_change_pct": (
+                        result.analysis.constituents.weighted_change_pct
+                    ),
+                    "coverage": result.analysis.constituents.weight_coverage,
+                    "confidence": result.analysis.constituents.confidence,
+                    "leaders": list(result.analysis.constituents.top_contributors[:5]),
+                    "laggards": list(result.analysis.constituents.top_detractors[:5]),
+                    "evidence": list(result.analysis.constituents.evidence),
+                },
+                "options": {
+                    "max_pain": (
+                        float(result.analysis.options.max_pain_strike)
+                        if result.analysis.options.max_pain_strike is not None
+                        else None
+                    ),
+                    "call_walls": [float(x) for x in result.analysis.options.call_walls],
+                    "put_walls": [float(x) for x in result.analysis.options.put_walls],
+                    "pcr_oi": result.analysis.options.pcr_oi,
+                    "oi_structure_score": result.analysis.options.oi_structure_score,
+                    # None, not 0.0, when the forward was never solved.
+                    "basis_score": result.analysis.options.basis_score,
+                    "excess_basis": (
+                        float(result.analysis.options.excess_basis)
+                        if result.analysis.options.excess_basis is not None
+                        else None
+                    ),
+                    "confidence": result.analysis.options.confidence,
+                },
+                "volatility": {
+                    "regime": str(result.analysis.volatility.regime),
+                    "atm_iv": result.analysis.volatility.atm_iv,
+                    "iv_percentile": result.analysis.volatility.iv_percentile,
+                    "expected_move": (
+                        float(result.analysis.volatility.expected_move)
+                        if result.analysis.volatility.expected_move is not None
+                        else None
+                    ),
+                    "expected_absolute_move": (
+                        float(result.analysis.volatility.expected_absolute_move)
+                        if result.analysis.volatility.expected_absolute_move is not None
+                        else None
+                    ),
+                    "confidence": result.analysis.volatility.confidence,
+                },
             },
             "strategy": str(result.selected_strategy),
             "is_actionable": result.is_actionable,
