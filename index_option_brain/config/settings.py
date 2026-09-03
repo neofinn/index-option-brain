@@ -29,10 +29,30 @@ class Settings(BaseSettings):
     llm_enabled: bool = Field(default=False, alias="LLM_ENABLED")
     run_mode: RunMode = Field(default=RunMode.PAPER, alias="RUN_MODE")
 
-    database_url: str = Field(
-        default="postgresql+asyncpg://localhost:5432/index_option_brain",
-        alias="DATABASE_URL",
-    )
+    database_url: str = Field(default="", alias="DATABASE_URL")
+    """Where observations are persisted. Empty means SQLite at `sqlite_path`.
+
+    The default used to be a Postgres URL on localhost, which meant a fresh
+    box's first act was to fail to connect to a server nobody had installed
+    — and to record nothing while it did. Capture cannot be back-filled, so
+    the default has to be a store that always works. A real Postgres URL
+    here takes over; both run the same schema.
+
+    Synchronous forms are accepted: `postgresql://` and `sqlite:///` are
+    rewritten onto async drivers rather than failing at connect time with an
+    error about greenlets.
+    """
+    sqlite_path: str = Field(default="var/index_brain.sqlite", alias="SQLITE_PATH")
+    capture_enabled: bool = Field(default=True, alias="CAPTURE_ENABLED")
+    """Whether to record what is observed.
+
+    On by default, and worth defending: the chain corpus is the only thing
+    this system accumulates that cannot be bought or recovered later. A
+    session not captured is a session of future backtesting that does not
+    exist.
+    """
+    capture_chain_seconds: int = Field(default=300, alias="CAPTURE_CHAIN_SECONDS")
+    """Gap between recorded option chains. ~170 rows each."""
     redis_url: str = Field(default="redis://localhost:6379/0", alias="REDIS_URL")
 
     kill_switch_enabled: bool = Field(default=False, alias="KILL_SWITCH_ENABLED")

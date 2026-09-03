@@ -14,3 +14,10 @@ venv/
 htmlcov/
 *.log
 .DS_Store
+
+# Captured observations: the corpus is per-deployment runtime data, and the
+# chain table grows without bound. It belongs on the box, not in the repo.
+var/*.sqlite
+var/*.sqlite-journal
+var/*.sqlite-wal
+var/*.sqlite-shm

@@ -20,6 +20,7 @@ different snapshots the screen would describe a market that never existed.
 
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -46,10 +47,13 @@ from index_option_brain.data.adapters.nse_public import (
 from index_option_brain.data.bar_aggregator import AggregatingIndexAdapter
 from index_option_brain.data.bar_store import BarStore
 from index_option_brain.data.dhan_instruments import DhanInstrumentMaster
+from index_option_brain.database.repository import SnapshotRepository
 from index_option_brain.state.market_state_builder import (
     InMemoryIvHistoryStore,
     MarketStateBuilder,
 )
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_SYMBOLS = ("NIFTY", "BANKNIFTY")
 
@@ -394,6 +398,40 @@ class LiveEngine:
             "stats": self.capture.stats.as_dict(),
             "coverage": await self.capture.coverage(symbol),
         }
+
+    async def recent_cycles(
+        self, symbol: str, *, limit: int = 60
+    ) -> list[dict[str, Any]]:
+        """Recorded cycles for the console's history panel, newest first.
+
+        Returns an empty list when persistence is unreachable — the caller
+        has already reported whether capture is enabled, so an empty list
+        here cannot be confused with "capture is off".
+        """
+        if self.capture is None or not await self.capture.ensure_ready():
+            return []
+        try:
+            async with self.capture.database.session() as session:
+                rows = await SnapshotRepository(session).recent_cycles(
+                    symbol, limit=limit
+                )
+                return [
+                    {
+                        "observed_at": row.observed_at.isoformat(),
+                        "regime": row.regime,
+                        "regime_confidence": row.regime_confidence,
+                        "signal_direction": row.signal_direction,
+                        "signal_score": row.signal_score,
+                        "strategy": row.strategy,
+                        "is_actionable": row.is_actionable,
+                        "basis_score": row.basis_score,
+                        "index_confidence": row.index_confidence,
+                    }
+                    for row in rows
+                ]
+        except Exception:
+            logger.exception("History unavailable")
+            return []
 
     def bar_coverage(self, symbol: str) -> dict[str, Any]:
         """How much history has been observed, and whether it has holes.

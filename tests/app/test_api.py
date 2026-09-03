@@ -422,3 +422,74 @@ class TestDailyHistorySeed:
         body = response.json()
         assert body["regime"]["type"] == "UNCERTAIN"
         assert any("coverage" in line for line in body["regime"]["evidence"])
+
+
+class TestCaptureSurface:
+    """The corpus is the only thing this system accumulates that cannot be
+    bought or recovered later, so its state has to be reportable rather than
+    assumed. A capture that silently stopped looks exactly like one with
+    nothing to do."""
+
+    def _recording_client(self) -> TestClient:
+        from datetime import timedelta
+
+        from index_option_brain.capture import CaptureConfig, CaptureRecorder
+        from index_option_brain.database.engine import Database
+
+        engine = engine_on(nse_session())
+        engine.capture = CaptureRecorder(
+            database=Database.in_memory(),
+            config=CaptureConfig(
+                state_interval=timedelta(0),
+                chain_interval=timedelta(0),
+                # The recorded fixture is a closed-market snapshot.
+                capture_when_closed=True,
+            ),
+        )
+        return TestClient(create_app(engine, run_poller=False))
+
+    def test_capture_reports_being_disabled_with_a_reason(
+        self, client: TestClient
+    ) -> None:
+        body = client.get("/api/market/NIFTY").json()
+        assert body["capture"]["enabled"] is False
+        assert body["capture"]["reason"]
+
+    def test_history_says_it_is_not_recording_rather_than_returning_empty(
+        self, client: TestClient
+    ) -> None:
+        """An empty list would read as "the engine has decided nothing"."""
+        body = client.get("/api/history/NIFTY").json()
+        assert body["available"] is False
+        assert body["reason"]
+        assert body["cycles"] == []
+
+    def test_history_reads_back_what_capture_wrote(self) -> None:
+        client = self._recording_client()
+        client.get("/api/analysis/NIFTY")
+
+        body = client.get("/api/history/NIFTY").json()
+        assert body["available"] is True
+        assert body["count"] >= 1
+        assert body["cycles"][0]["regime"]
+        assert body["cycles"][0]["strategy"]
+
+    def test_the_corpus_grows_as_a_side_effect_of_analysis(self) -> None:
+        """Capture must not need its own scheduler to work — every analysis
+        cycle is an observation worth keeping."""
+        client = self._recording_client()
+        client.get("/api/analysis/NIFTY")
+
+        capture = client.get("/api/market/NIFTY").json()["capture"]
+        assert capture["enabled"] is True
+        assert capture["coverage"]["legs"] > 0
+        assert capture["stats"]["failures"] == 0
+
+    def test_basis_reaches_history_as_null_when_unsolved(self) -> None:
+        """Zero says the futures are flat to carry; null says nobody
+        looked."""
+        client = self._recording_client()
+        client.get("/api/analysis/NIFTY")
+
+        cycle = client.get("/api/history/NIFTY").json()["cycles"][0]
+        assert "basis_score" in cycle

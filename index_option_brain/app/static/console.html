@@ -409,6 +409,36 @@
       <p class="empty" id="basis-note"></p>
     </section>
 
+    <section class="card">
+      <header><h2>Backtest corpus</h2><div class="spacer"></div>
+        <span class="pill idle" id="cap-pill"><span id="cap-state">—</span></span></header>
+      <div class="big" id="cap-sessions">—</div>
+      <div class="sub" id="cap-sub">sessions of option chains recorded</div>
+      <div class="rows" id="cap-rows" hidden>
+        <div class="row"><span class="k">Chain snapshots</span><span class="v" id="cap-snaps">—</span></div>
+        <div class="row"><span class="k">Legs stored</span><span class="v" id="cap-legs">—</span></div>
+        <div class="row"><span class="k">First / last</span><span class="v" id="cap-span">—</span></div>
+        <div class="row"><span class="k">Written this run</span><span class="v" id="cap-written">—</span></div>
+        <div class="row"><span class="k">Write failures</span><span class="v" id="cap-fail">—</span></div>
+      </div>
+      <p class="empty" id="cap-note"></p>
+    </section>
+
+    <section class="card wide">
+      <header><h2>Decision history</h2><div class="spacer"></div>
+        <span class="pill idle" id="hist-pill"><span id="hist-state">—</span></span></header>
+      <p class="empty" id="hist-note"></p>
+      <div class="scroll-x" id="hist-wrap" hidden>
+        <table class="legs">
+          <thead><tr>
+            <th>Observed</th><th>Regime</th><th>Conf</th><th>Signal</th>
+            <th>Score</th><th>Strategy</th><th>Basis</th>
+          </tr></thead>
+          <tbody id="hist-rows"></tbody>
+        </table>
+      </div>
+    </section>
+
     <section class="card wide">
       <header><h2>Ranked structure</h2><div class="spacer"></div>
         <span class="pill idle" id="cand-pill"><span id="cand-state">—</span></span></header>
@@ -733,6 +763,35 @@ function renderMarket(market) {
     ? "constituents, auction of " + breadth.as_of.slice(11, 19) + " IST"
     : "constituents observed";
 
+  // The corpus is the only thing here that cannot be recovered later, so a
+  // capture that silently stopped has to be visible rather than inferred.
+  const cap = market.capture;
+  if (!cap || !cap.enabled) {
+    $("cap-sessions").textContent = "—";
+    $("cap-rows").hidden = true;
+    pill("cap-pill", "cap-state", "disabled", "bad");
+    $("cap-note").textContent = (cap && cap.reason) ||
+      "Capture is off, so nothing observed today can be backtested later.";
+  } else {
+    const cov = cap.coverage || {};
+    const st = cap.stats || {};
+    $("cap-sessions").textContent = cov.sessions ?? 0;
+    $("cap-rows").hidden = false;
+    $("cap-snaps").textContent = (cov.snapshots ?? 0).toLocaleString("en-IN");
+    $("cap-legs").textContent = (cov.legs ?? 0).toLocaleString("en-IN");
+    $("cap-span").textContent = cov.first ? cov.first + " to " + cov.last : "nothing yet";
+    $("cap-written").textContent =
+      (st.states_written ?? 0) + " states / " + (st.chains_written ?? 0) + " chains";
+    $("cap-fail").textContent = st.failures ?? 0;
+    const failing = (st.failures ?? 0) > 0;
+    pill("cap-pill", "cap-state", failing ? "failing" : "recording", failing ? "act" : "ok");
+    $("cap-note").textContent = failing
+      ? "Last error: " + (st.last_error || "unknown")
+      : (cov.sessions ?? 0) < 20
+        ? "A P&L backtest needs many sessions of chains. Nothing free serves them historically, so this only grows while the process runs."
+        : "";
+  }
+
   const fwd = market.forward;
   const hasForward = fwd && fwd.value !== null;
   $("basis-rows").hidden = !hasForward;
@@ -756,6 +815,59 @@ function renderMarket(market) {
 
   $("foot-asof").textContent = "As of: " + market.as_of + " (from the feed, not this clock)";
   return true;
+}
+
+async function renderHistory(symbol) {
+  let body;
+  try {
+    body = await getJSON("/api/history/" + encodeURIComponent(symbol) + "?limit=40");
+  } catch (err) {
+    pill("hist-pill", "hist-state", "unavailable", "bad");
+    $("hist-note").textContent = "Could not read recorded history: " + err.message;
+    return;
+  }
+  const rows = $("hist-rows");
+  rows.innerHTML = "";
+  if (!body.available) {
+    $("hist-wrap").hidden = true;
+    pill("hist-pill", "hist-state", "not recorded", "bad");
+    $("hist-note").textContent = body.reason || "";
+    return;
+  }
+  if (!body.cycles.length) {
+    $("hist-wrap").hidden = true;
+    pill("hist-pill", "hist-state", "no cycles yet", "idle");
+    $("hist-note").textContent =
+      "Recording is on but nothing has been stored yet. Cycles are written while the market is open.";
+    return;
+  }
+  $("hist-wrap").hidden = false;
+  $("hist-note").textContent = "";
+  pill("hist-pill", "hist-state", body.count + " recorded", "ok");
+  for (const c of body.cycles) {
+    const tr = document.createElement("tr");
+    const cells = [
+      c.observed_at.slice(11, 19),
+      c.regime.replace(/_/g, " "),
+      fmt(c.regime_confidence) ?? "—",
+      c.signal_direction,
+      fmt(c.signal_score) ?? "—",
+      c.strategy.replace(/_/g, " "),
+      // None, not 0.00: an unsolved forward is not a flat basis.
+      c.basis_score === null || c.basis_score === undefined
+        ? "not solved"
+        : signed(c.basis_score, 2),
+    ];
+    cells.forEach(function (value, i) {
+      const td = document.createElement("td");
+      td.textContent = value;
+      if (i === 3) {
+        td.className = value === "bullish" ? "up" : value === "bearish" ? "down" : "";
+      }
+      tr.appendChild(td);
+    });
+    rows.appendChild(tr);
+  }
 }
 
 function renderAnalysis(analysis) {
@@ -870,6 +982,9 @@ async function load({ probe = false } = {}) {
     const market = await getJSON(`/api/market/${symbol}`);
     if (renderMarket(market)) {
       renderAnalysis(await getJSON(`/api/analysis/${symbol}`));
+      // History reads the database, so it is allowed to fail on its own
+      // without taking the live panels down with it.
+      await renderHistory(symbol);
     }
   } catch (error) {
     showOffline(

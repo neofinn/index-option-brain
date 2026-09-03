@@ -20,6 +20,7 @@ from __future__ import annotations
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -30,7 +31,8 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from index_option_brain.agent import NarrativeProvider
 from index_option_brain.app.live import FeedUnavailable, LiveEngine, session_label
 from index_option_brain.app.runner import MarketPoller, PollerConfig
-from index_option_brain.config.settings import get_settings
+from index_option_brain.capture import CaptureConfig, CaptureRecorder
+from index_option_brain.config.settings import Settings, get_settings
 from index_option_brain.contracts.provider import Capability, ProviderDescriptor
 from index_option_brain.data.bar_store import BarStore
 from index_option_brain.data.providers import (
@@ -41,6 +43,7 @@ from index_option_brain.data.providers import (
     missing_capabilities,
     verified_providers,
 )
+from index_option_brain.database.engine import Database
 
 
 def _console_path() -> Path:
@@ -110,6 +113,29 @@ def _describe(provider: ProviderDescriptor, health: Any) -> dict[str, Any]:
     }
 
 
+def _capture_from(settings: Settings) -> CaptureRecorder | None:
+    """The capture recorder configured for this process, or None.
+
+    Defaults to SQLite rather than to nothing, because the chain corpus is
+    the only thing here that cannot be recovered later — a box that records
+    nothing until someone installs Postgres spends its first weeks throwing
+    away the irreplaceable part.
+    """
+    if not settings.capture_enabled:
+        return None
+    database = (
+        Database(url=settings.database_url)
+        if settings.database_url
+        else Database.sqlite(settings.sqlite_path)
+    )
+    return CaptureRecorder(
+        database=database,
+        config=CaptureConfig(
+            chain_interval=timedelta(seconds=settings.capture_chain_seconds)
+        ),
+    )
+
+
 def create_app(
     engine: LiveEngine | None = None,
     *,
@@ -124,7 +150,8 @@ def create_app(
     """
     settings = get_settings()
     live = engine or LiveEngine(
-        bar_store=BarStore(settings.bar_store_dir) if settings.bar_store_dir else None
+        bar_store=BarStore(settings.bar_store_dir) if settings.bar_store_dir else None,
+        capture=_capture_from(settings),
     )
     market_poller = poller or MarketPoller(
         live, symbols=("NIFTY", "BANKNIFTY"), config=PollerConfig()
@@ -522,6 +549,31 @@ def create_app(
                 if candidate is not None
                 else None
             ),
+        }
+
+    @app.get("/api/history/{symbol}")
+    async def history(symbol: str, limit: int = 60) -> dict[str, Any]:
+        """Recorded analysis cycles, newest first.
+
+        Reads the database rather than a ring buffer in memory, so the panel
+        survives a restart — which is the point of persisting cycles at all.
+        Returns `available: False` with a reason when capture is off, never
+        an empty list that would read as "the engine has decided nothing".
+        """
+        symbol = symbol.upper()
+        if live.capture is None:
+            return {
+                "available": False,
+                "symbol": symbol,
+                "reason": "Capture is disabled, so no history is being recorded",
+                "cycles": [],
+            }
+        cycles = await live.recent_cycles(symbol, limit=min(limit, 500))
+        return {
+            "available": True,
+            "symbol": symbol,
+            "count": len(cycles),
+            "cycles": cycles,
         }
 
     @app.get("/", response_class=HTMLResponse)
