@@ -21,6 +21,7 @@ from fastapi.testclient import TestClient
 from index_option_brain.app.live import LiveEngine
 from index_option_brain.app.main import create_app
 from index_option_brain.contracts.enums import BarInterval
+from index_option_brain.data.adapters.base import DataAdapterError
 from index_option_brain.data.adapters.nse_public import NsePublicAdapter
 from index_option_brain.data.bar_aggregator import AggregatingIndexAdapter
 from index_option_brain.data.http import HttpResponse
@@ -31,16 +32,19 @@ from index_option_brain.state.market_state_builder import (
 from tests.data.conftest import nse_session
 
 
-def engine_on(session) -> LiveEngine:
-    """A LiveEngine wired to a recorded transport rather than the network."""
+def engine_on(session, *, daily_history_bars: int = 0) -> LiveEngine:
+    """A LiveEngine wired to a recorded transport rather than the network.
+
+    `daily_history_bars` defaults to 0 so the archive seed stays off: it has
+    its own transport, and a test that silently reached the live archive
+    would be neither hermetic nor reproducible.
+    """
     nse = NsePublicAdapter(session)
     index = AggregatingIndexAdapter(nse, intervals=(BarInterval.MINUTE_5, BarInterval.DAY))
-    engine = LiveEngine(cache_seconds=0.0)
+    engine = LiveEngine(cache_seconds=0.0, daily_history_bars=daily_history_bars)
     engine._nse = nse
     engine._index = index
-    engine._builder = MarketStateBuilder(
-        index, None, nse, nse, InMemoryIvHistoryStore()
-    )
+    engine._builder = MarketStateBuilder(index, None, nse, nse, InMemoryIvHistoryStore())
     return engine
 
 
@@ -88,9 +92,7 @@ class TestProviders:
         # Only NSE's mapping has been proven against real payloads.
         assert body["verified_count"] == 1
 
-    def test_unprobed_health_is_not_configured_rather_than_zeroed(
-        self, client: TestClient
-    ):
+    def test_unprobed_health_is_not_configured_rather_than_zeroed(self, client: TestClient):
         """A console showing 0 ms for a provider never called would be
         reporting a measurement it does not have."""
         body = client.get("/api/providers").json()
@@ -111,18 +113,14 @@ class TestProviders:
             "OPTION_CHAIN",
         }
 
-    def test_a_blocked_feed_probes_as_failed_with_the_reason(
-        self, blocked_client: TestClient
-    ):
+    def test_a_blocked_feed_probes_as_failed_with_the_reason(self, blocked_client: TestClient):
         body = blocked_client.get("/api/providers?probe=true").json()
         nse = next(p for p in body["providers"] if p["provider_id"] == "nse_public")
         assert nse["health"]["state"] in {"FAILED", "DEGRADED"}
         assert nse["health"]["last_error"]
         assert not nse["health"]["usable"] or nse["health"]["state"] == "DEGRADED"
 
-    def test_the_listing_still_renders_when_the_probe_fails(
-        self, blocked_client: TestClient
-    ):
+    def test_the_listing_still_renders_when_the_probe_fails(self, blocked_client: TestClient):
         """The one screen that should always be readable must not break
         because the thing it is reporting on is broken."""
         response = blocked_client.get("/api/providers?probe=true")
@@ -135,9 +133,7 @@ class TestProviders:
         assert kite["implemented"] is False
         assert any("not been verified" in note for note in kite["notes"])
 
-    def test_credential_fields_are_carried_for_the_console_to_render(
-        self, client: TestClient
-    ):
+    def test_credential_fields_are_carried_for_the_console_to_render(self, client: TestClient):
         body = client.get("/api/providers").json()
         angel = next(p for p in body["providers"] if p["provider_id"] == "angel_one")
         names = {field["name"] for field in angel["credential_fields"]}
@@ -145,9 +141,7 @@ class TestProviders:
         totp = next(f for f in angel["credential_fields"] if f["name"] == "totp_secret")
         assert totp["secret"] is True
 
-    def test_a_data_provider_is_not_offered_as_an_execution_route(
-        self, client: TestClient
-    ):
+    def test_a_data_provider_is_not_offered_as_an_execution_route(self, client: TestClient):
         body = client.get("/api/providers").json()
         nse = next(p for p in body["providers"] if p["provider_id"] == "nse_public")
         assert nse["can_trade"] is False
@@ -162,9 +156,7 @@ class TestMarket:
         assert body["index"]["previous_close"] == pytest.approx(24055.8)
         assert body["index"]["change_pct"] == pytest.approx(-0.5876, abs=1e-3)
 
-    def test_a_value_the_provider_does_not_publish_is_null_not_zero(
-        self, client: TestClient
-    ):
+    def test_a_value_the_provider_does_not_publish_is_null_not_zero(self, client: TestClient):
         """NSE publishes no index VWAP. A zero here would flow into the VWAP
         relationship the Index brain reads and put price permanently above
         it."""
@@ -243,9 +235,7 @@ class TestAnalysis:
         assert body["strategy"]
         assert "direction" in body["signal"]
 
-    def test_with_no_bars_the_regime_is_uncertain_with_a_reason(
-        self, client: TestClient
-    ):
+    def test_with_no_bars_the_regime_is_uncertain_with_a_reason(self, client: TestClient):
         """The console must not show a confident classification of a market
         nothing has measured."""
         body = client.get("/api/analysis/NIFTY").json()
@@ -260,9 +250,7 @@ class TestAnalysis:
         assert body["is_authorized"] is False
         assert "No broker connected" in body["authorization_blocked_reason"]
 
-    def test_the_candidate_scores_are_reported_for_inspection(
-        self, client: TestClient
-    ):
+    def test_the_candidate_scores_are_reported_for_inspection(self, client: TestClient):
         """Refusing to classify is not refusing to explain."""
         body = client.get("/api/analysis/NIFTY").json()
         assert body["regime"]["scores"]
@@ -325,3 +313,91 @@ class TestConsoleIsFoundWhenInstalled:
             assert _console_path() == custom
         finally:
             del os.environ["CONSOLE_HTML"]
+
+
+class TestDailyHistorySeed:
+    """The archive seed is what lifts the Regime Engine's coverage gate.
+
+    Without daily bars the Index brain's confidence is scaled to 0.00 and the
+    gate refuses to classify — correct, but it means the whole engine can
+    only ever answer NO_TRADE. These tests pin the seed's effect and its
+    isolation, because a seed that silently no-ops would restore that state
+    without any visible failure.
+    """
+
+    def _archive(self, bars: int = 60) -> object:
+        from datetime import UTC, datetime, timedelta
+        from decimal import Decimal
+
+        from index_option_brain.contracts.instruments import Bar
+
+        class _StubArchive:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            async def get_index_bars(self, symbol, interval, count, **_):
+                self.calls += 1
+                start = datetime(2026, 6, 1, tzinfo=UTC)
+                # A gently declining series, so the brains have real structure
+                # to measure rather than a flat line they would score as calm.
+                return [
+                    Bar(
+                        timestamp=start + timedelta(days=i),
+                        open=Decimal(24500 - 8 * i),
+                        high=Decimal(24560 - 8 * i),
+                        low=Decimal(24440 - 8 * i),
+                        close=Decimal(24500 - 8 * i),
+                        volume=250_000_000,
+                    )
+                    for i in range(bars)
+                ]
+
+            async def aclose(self) -> None:
+                return None
+
+        return _StubArchive()
+
+    def test_seeding_lifts_the_regime_out_of_uncertain(self) -> None:
+        archive = self._archive()
+        engine = engine_on(nse_session(), daily_history_bars=60)
+        engine.archive = archive
+        client = TestClient(create_app(engine, run_poller=False))
+
+        body = client.get("/api/analysis/NIFTY").json()
+        assert archive.calls == 1
+        assert body["regime"]["type"] != "UNCERTAIN"
+        assert body["regime"]["confidence"] > 0.0
+
+    def test_the_seed_runs_once_per_symbol_not_once_per_cycle(self) -> None:
+        """60 archive requests on every analysis cycle would rate-limit the
+        source that the whole regime classification now depends on."""
+        archive = self._archive()
+        engine = engine_on(nse_session(), daily_history_bars=60)
+        engine.archive = archive
+        client = TestClient(create_app(engine, run_poller=False))
+
+        for _ in range(3):
+            client.get("/api/analysis/NIFTY")
+        assert archive.calls == 1
+
+    def test_an_unusable_archive_degrades_to_uncertain_rather_than_failing(
+        self,
+    ) -> None:
+        """A dead archive must cost the classification, not the console."""
+
+        class _DeadArchive:
+            async def get_index_bars(self, *a, **k):
+                raise DataAdapterError("archive unreachable")
+
+            async def aclose(self) -> None:
+                return None
+
+        engine = engine_on(nse_session(), daily_history_bars=60)
+        engine.archive = _DeadArchive()
+        client = TestClient(create_app(engine, run_poller=False))
+
+        response = client.get("/api/analysis/NIFTY")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["regime"]["type"] == "UNCERTAIN"
+        assert any("coverage" in line for line in body["regime"]["evidence"])

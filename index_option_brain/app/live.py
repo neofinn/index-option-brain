@@ -35,6 +35,7 @@ from index_option_brain.contracts.provider import (
     ProviderHealth,
 )
 from index_option_brain.data.adapters.base import DataAdapterError
+from index_option_brain.data.adapters.nse_archive import NseArchiveAdapter
 from index_option_brain.data.adapters.nse_public import (
     NSE_PUBLIC_DESCRIPTOR,
     NsePublicAdapter,
@@ -82,11 +83,27 @@ class LiveEngine:
     _index: AggregatingIndexAdapter | None = None
     _builder: MarketStateBuilder | None = None
     _brain: QuantitativeBrain = field(default_factory=QuantitativeBrain)
-    _iv_history: InMemoryIvHistoryStore = field(
-        default_factory=InMemoryIvHistoryStore
-    )
+    _iv_history: InMemoryIvHistoryStore = field(default_factory=InMemoryIvHistoryStore)
     _health: dict[str, ProviderHealth] = field(default_factory=dict)
     _master: DhanInstrumentMaster | None = None
+    daily_history_bars: int = 60
+    """Sessions to seed from the NSE archive on start.
+
+    The Index brain's confidence is scaled by `len(daily) / min_daily_bars`,
+    so with no daily history it reports 0.00 and the Regime Engine's coverage
+    gate — correctly — refuses to classify anything. 60 clears the 30-bar
+    floor with room for the holidays inside any given quarter.
+    """
+    archive: NseArchiveAdapter | None = None
+    """History source for the daily seed.
+
+    Injectable so a test — or a deployment behind a proxy that cannot reach
+    `archives.nseindia.com` — can supply its own transport. Left as None, one
+    is built on first use against the live archive. Set
+    `daily_history_bars=0` to disable seeding entirely.
+    """
+    _seeded: set[str] = field(default_factory=set)
+    _owns_archive: bool = False
 
     # ------------------------------------------------------------ lifecycle
 
@@ -185,6 +202,13 @@ class LiveEngine:
         self._nse = None
         self._index = None
         self._builder = None
+        if self.archive is not None and self._owns_archive:
+            # Only close what this engine opened; an injected adapter belongs
+            # to its caller and may outlive one engine.
+            await self.archive.aclose()
+            self.archive = None
+            self._owns_archive = False
+        self._seeded.clear()
         self._cache.clear()
 
     # --------------------------------------------------------------- cache
@@ -277,10 +301,42 @@ class LiveEngine:
 
     # -------------------------------------------------------- market state
 
+    async def seed_daily_history(self, symbol: str) -> int:
+        """Seed the aggregator's daily series from NSE's published archive.
+
+        Returns the number of bars seeded, or 0 when the archive could not
+        supply a clean series. Zero is not a failure to hide: the brains
+        degrade honestly on a short series, and the Regime Engine's coverage
+        gate reports the shortfall in its own evidence. What must not happen
+        is a *partial* seed presented as history, which is why the adapter
+        raises on holes rather than returning what it managed to fetch.
+
+        Idempotent per symbol: seeding twice would double-count nothing, but
+        the archive round trip is ~60 requests and not worth repeating.
+        """
+        key = symbol.upper()
+        if key in self._seeded or self.daily_history_bars <= 0:
+            return 0
+        _, index, _ = self._ensure()
+        if self.archive is None:
+            self.archive = NseArchiveAdapter()
+            self._owns_archive = True
+        try:
+            bars = await self.archive.get_index_bars(key, BarInterval.DAY, self.daily_history_bars)
+        except DataAdapterError:
+            # Mark it attempted anyway: retrying 60 requests on every cycle
+            # would turn one bad archive into a self-inflicted rate limit.
+            self._seeded.add(key)
+            return 0
+        index.seed(key, BarInterval.DAY, bars)
+        self._seeded.add(key)
+        return len(bars)
+
     async def market_state(self, symbol: str) -> MarketState:
         cached = self._fresh(f"state:{symbol}", MarketState)
         if cached is not None:
             return cached
+        await self.seed_daily_history(symbol)
         _, _, builder = self._ensure()
         try:
             state = await builder.build(symbol)
@@ -319,9 +375,7 @@ class LiveEngine:
                 "discarded_partial": stats.bars_discarded_partial,
                 "has_gaps": stats.has_gaps,
                 "first_observation": (
-                    stats.first_observation.isoformat()
-                    if stats.first_observation
-                    else None
+                    stats.first_observation.isoformat() if stats.first_observation else None
                 ),
                 "seeded": stats.seeded_bars,
             }
