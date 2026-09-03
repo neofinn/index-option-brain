@@ -18,6 +18,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from decimal import Decimal
+from typing import Any
 
 from index_option_brain.brain import indicators as ind
 from index_option_brain.brain.config import OptionsBrainConfig
@@ -73,6 +74,10 @@ class DeterministicOptionsBrain(OptionsBrain):
             by_strike, window_strikes, spot, cfg
         )
         evidence.extend(pressure_evidence)
+
+        basis_fields = self._basis(state, cfg)
+        if (basis_note := basis_fields.pop("_evidence", None)) is not None:
+            evidence.append(basis_note)
 
         call_walls = self._walls(by_strike, strikes, OptionType.CE, spot, cfg)
         put_walls = self._walls(by_strike, strikes, OptionType.PE, spot, cfg)
@@ -130,7 +135,34 @@ class DeterministicOptionsBrain(OptionsBrain):
             strike_concentration=strike_concentration,
             max_pain_strike=Decimal(str(max_pain)) if max_pain is not None else None,
             chain_completeness=completeness,
+            **basis_fields,
         )
+
+    def _basis(self, state: MarketState, cfg: OptionsBrainConfig) -> dict[str, Any]:
+        """Futures positioning, from the forward the chain was priced against.
+
+        Returns nothing at all when the forward was not measured — an
+        unsolved basis must not render as a basis of zero, which would read
+        as "the futures are flat to carry" when it means "nobody looked".
+        """
+        options = state.options_state
+        excess = options.forward_excess_basis
+        if excess is None or options.forward_strikes_used < cfg.basis_min_strikes:
+            return {}
+
+        points = float(excess)
+        score = ind.clamp(points / cfg.basis_full_scale_points)
+        direction = "premium to" if points > 0 else "discount to"
+        return {
+            "forward_basis": options.forward_basis,
+            "excess_basis": excess,
+            "basis_score": score,
+            "_evidence": (
+                f"Forward {options.forward} is {abs(points):.0f} points "
+                f"{direction} carry across {options.forward_strikes_used} "
+                f"parity strikes ({score:+.2f})"
+            ),
+        }
 
     def _group_by_strike(
         self, chain: list[OptionQuote]

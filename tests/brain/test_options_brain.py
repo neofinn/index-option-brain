@@ -9,6 +9,8 @@ make on its own.
 
 from __future__ import annotations
 
+from decimal import Decimal
+
 from index_option_brain.brain.options_brain import DeterministicOptionsBrain
 from index_option_brain.contracts.enums import OptionType
 from index_option_brain.contracts.market_state import MarketState
@@ -148,3 +150,82 @@ class TestDegradedInput:
             uptrend_state.model_copy(update={"options_state": options_state})
         )
         assert analysis.chain_completeness == 0.5
+
+
+class TestBasis:
+    """Futures positioning, read off the forward the chain was priced against.
+
+    Reported here rather than in the Index brain because it is a derivatives
+    measurement, and — like `oi_structure_score` — it is corroborating
+    evidence the Signal Engine weighs, never a standalone reason to trade.
+    """
+
+    def _with_forward(
+        self,
+        state: MarketState,
+        *,
+        forward: str,
+        basis: str,
+        excess: str,
+        strikes: int = 6,
+    ) -> MarketState:
+        return state.model_copy(
+            update={
+                "options_state": state.options_state.model_copy(
+                    update={
+                        "forward": Decimal(forward),
+                        "forward_basis": Decimal(basis),
+                        "forward_excess_basis": Decimal(excess),
+                        "forward_strikes_used": strikes,
+                    }
+                )
+            }
+        )
+
+    def test_an_unmeasured_forward_reports_nothing_not_zero(
+        self, uptrend_state: MarketState
+    ):
+        """A basis of zero says the futures are flat to carry. No basis says
+        nobody looked. Rendering the second as the first is the failure this
+        whole codebase is built to avoid."""
+        analysis = brain.analyze(uptrend_state)
+        assert analysis.basis_score is None
+        assert analysis.excess_basis is None
+        assert analysis.forward_basis is None
+
+    def test_a_premium_to_carry_scores_positive(self, uptrend_state: MarketState):
+        state = self._with_forward(
+            uptrend_state, forward="24064.14", basis="43.74", excess="21.09"
+        )
+        analysis = brain.analyze(state)
+
+        assert analysis.basis_score is not None
+        assert analysis.basis_score > 0
+        assert analysis.excess_basis == Decimal("21.09")
+        assert any("premium to carry" in line for line in analysis.evidence)
+
+    def test_a_discount_to_carry_scores_negative(self, uptrend_state: MarketState):
+        state = self._with_forward(
+            uptrend_state, forward="23915.59", basis="1.14", excess="-24.40"
+        )
+        analysis = brain.analyze(state)
+
+        assert analysis.basis_score is not None
+        assert analysis.basis_score < 0
+        assert any("discount to carry" in line for line in analysis.evidence)
+
+    def test_the_score_is_bounded(self, uptrend_state: MarketState):
+        state = self._with_forward(
+            uptrend_state, forward="25000", basis="900", excess="880"
+        )
+        analysis = brain.analyze(state)
+        assert analysis.basis_score == 1.0
+
+    def test_too_few_parity_strikes_is_a_quote_not_a_measurement(
+        self, uptrend_state: MarketState
+    ):
+        """A forward solved off one strike moves with that strike's spread."""
+        state = self._with_forward(
+            uptrend_state, forward="24064.14", basis="43.74", excess="21.09", strikes=1
+        )
+        assert brain.analyze(state).basis_score is None

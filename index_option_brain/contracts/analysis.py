@@ -125,6 +125,19 @@ class OptionsAnalysis(BaseModel):
     max_pain_strike: Decimal | None = None
     chain_completeness: float = 0.0
 
+    forward_basis: Decimal | None = None
+    """Forward minus spot in index points, or None when unmeasured."""
+    excess_basis: Decimal | None = None
+    """Basis beyond interest carry, in index points, or None when unmeasured."""
+    basis_score: float | None = None
+    """Excess basis normalised to [-1, 1], or None when unmeasured.
+
+    Positioning in the futures, not a forecast. Reported alongside the OI
+    structure it belongs with, and — like `oi_structure_score` — it is
+    corroborating evidence the Signal Engine must weigh against index and
+    breadth, never a standalone reason to trade.
+    """
+
 
 class VolatilityAnalysis(BaseModel):
     """Spec §8."""

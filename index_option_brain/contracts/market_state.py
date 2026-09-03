@@ -81,6 +81,26 @@ class OptionsState(BaseModel):
     expiry: date | None = None
     available_expiries: list[date] = Field(default_factory=list)
 
+    forward: Decimal | None = None
+    """The expiry's forward, solved from put-call parity on the live book.
+
+    None when no strike had a two-sided book on both legs — an unmeasured
+    forward, never `spot` standing in for one.
+    """
+    forward_basis: Decimal | None = None
+    """Forward minus spot, in index points."""
+    forward_excess_basis: Decimal | None = None
+    """Basis beyond pure interest carry, in index points.
+
+    The part that carries information. Pure carry is mechanical and tells you
+    only the rate and the days left; what the market pays *above* it is
+    positioning in the futures. On 3 Sep 2026 this went from -21 points on
+    the previous close to +22 intraday — a 43-point swing in one session,
+    while spot moved 0.4%.
+    """
+    forward_strikes_used: int = 0
+    """Strikes the parity solve averaged over. One is a quote, not a measure."""
+
 
 class VolatilityState(BaseModel):
     model_config = ConfigDict(frozen=True)

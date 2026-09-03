@@ -523,7 +523,18 @@ class TestImpliedVolatilityPolicy:
         """The 22900 CE: NSE published 46.55% off a last trade of 1,190 while
         the book stood at 965.20/1,082.25. 46.55% would give the strike a
         delta of 0.78 and an enormous vega, and if it survived into strike
-        ranking it would compete with genuine candidates."""
+        ranking it would compete with genuine candidates.
+
+        The book is marked instead. It solves to ~18% — a deep-ITM strike
+        with 24 points of time value on a 1,024 mid, hence a delta near 1 and
+        a small vega. Nothing resembling the published figure survives.
+
+        This strike used to come back with no IV at all. That was the wrong
+        forward talking: priced off `spot * exp(rate * years)` the mid sat
+        below intrinsic and no volatility could explain it, so it was
+        discarded. Against the forward the market actually quotes, it is an
+        ordinary deep-ITM call.
+        """
         raw = json.loads(payload("nse_option_chain.json"))
         published = next(
             row["CE"]["impliedVolatility"]
@@ -533,8 +544,12 @@ class TestImpliedVolatilityPolicy:
         assert published == 46.55
 
         chain = await nse.get_option_chain("NIFTY", NEAR_EXPIRY)
-        assert ce(chain, 22900).implied_volatility is None
-        assert ce(chain, 22900).greeks is None
+        resolved = ce(chain, 22900)
+        assert resolved.implied_volatility is not None
+        assert abs(float(resolved.implied_volatility) - published) > 20
+        assert resolved.greeks is not None
+        # 46.55% would put this delta near 0.78; the book puts it near 1.
+        assert float(resolved.greeks.delta) > 0.95
 
     async def test_iv_is_recovered_when_nse_publishes_none(
         self, nse: NsePublicAdapter

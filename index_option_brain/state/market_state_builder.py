@@ -20,6 +20,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from itertools import pairwise
 
+from index_option_brain.analytics.pricing import ForwardEstimate
 from index_option_brain.contracts.enums import BarInterval, MarketSessionState, OptionType
 from index_option_brain.contracts.instruments import (
     Bar,
@@ -38,6 +39,7 @@ from index_option_brain.contracts.market_state import (
 )
 from index_option_brain.data.adapters.base import (
     ConstituentDataAdapter,
+    DataAdapterError,
     IndexDataAdapter,
     OptionsChainAdapter,
     VolatilityDataAdapter,
@@ -141,12 +143,25 @@ class MarketStateBuilder:
         constituent_specs: list[ConstituentSpec] = []
         constituent_quotes: list[ConstituentQuote] = []
         if self._constituent_adapter is not None:
-            constituent_specs = await self._constituent_adapter.get_constituents(
-                index_symbol
-            )
-            constituent_quotes = await self._constituent_adapter.get_constituent_quotes(
-                [spec_.symbol for spec_ in constituent_specs]
-            )
+            # Breadth is one of four domains, and the only one whose source
+            # is a session-bounded auction board. Letting it fail the whole
+            # build would take the index, chain and volatility down with it —
+            # and take the console dark — every day after the pre-open window
+            # closes. The Constituent brain already reports an absence of
+            # quotes honestly, so degrade into that rather than out of the
+            # build.
+            try:
+                constituent_specs = await self._constituent_adapter.get_constituents(
+                    index_symbol
+                )
+                constituent_quotes = (
+                    await self._constituent_adapter.get_constituent_quotes(
+                        [spec_.symbol for spec_ in constituent_specs]
+                    )
+                )
+            except DataAdapterError:
+                constituent_specs = []
+                constituent_quotes = []
 
         weights = {s.symbol: float(s.weight) for s in constituent_specs}
         sectors = {s.symbol: s.sector for s in constituent_specs}
@@ -185,8 +200,11 @@ class MarketStateBuilder:
                 quotes=constituent_quotes, weights=weights, sectors=sectors
             ),
             sector_state=self._sector_state(constituent_specs, constituent_quotes),
-            options_state=OptionsState(
-                chain=chain, expiry=expiry, available_expiries=expiries
+            options_state=self._options_state(
+                index_symbol=index_symbol,
+                chain=chain,
+                expiry=expiry,
+                expiries=expiries,
             ),
             volatility_state=VolatilityState(
                 india_vix=vix,
@@ -198,6 +216,41 @@ class MarketStateBuilder:
                 atm_iv_history=history,
                 days_to_expiry=days_to_expiry,
             ),
+        )
+
+    def _options_state(
+        self,
+        *,
+        index_symbol: str,
+        chain: list[OptionQuote],
+        expiry: date | None,
+        expiries: list[date],
+    ) -> OptionsState:
+        """The chain, plus the forward the adapter priced its greeks against.
+
+        The forward is read back rather than recomputed. It is the same
+        number every delta in `chain` was derived from, and solving it a
+        second time here would let the state quietly disagree with the greeks
+        inside it. An adapter that exposes no forward contributes none — a
+        spot-derived stand-in would be an unmeasured basis rendered as a
+        measured one.
+        """
+        base = OptionsState(chain=chain, expiry=expiry, available_expiries=expiries)
+
+        getter = getattr(self._options_adapter, "last_forward", None)
+        if expiry is None or not callable(getter):
+            return base
+        estimate: ForwardEstimate | None = getter(index_symbol, expiry)
+        if estimate is None:
+            return base
+
+        return base.model_copy(
+            update={
+                "forward": Decimal(str(round(estimate.forward, 2))),
+                "forward_basis": Decimal(str(round(estimate.basis, 2))),
+                "forward_excess_basis": Decimal(str(round(estimate.excess_basis, 2))),
+                "forward_strikes_used": estimate.strikes_used,
+            }
         )
 
     def session_state(self, moment: datetime) -> MarketSessionState:

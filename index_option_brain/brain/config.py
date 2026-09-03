@@ -59,6 +59,21 @@ class ConstituentBrainConfig(_Config):
 
 
 class OptionsBrainConfig(_Config):
+    basis_full_scale_points: float = 30.0
+    """Excess basis, in index points, that scores +/-1.
+
+    Excess basis is what the futures pay above pure interest carry — the
+    positioning component, with the mechanical part removed. 30 points on
+    NIFTY is roughly 0.12%, a level reached only when the futures are being
+    pushed rather than merely carried. Scaled rather than thresholded so a
+    quiet basis contributes a small number instead of nothing.
+    """
+    basis_min_strikes: int = 3
+    """Parity strikes required before the basis is reported at all.
+
+    A forward solved off one or two strikes is a quote, not a measurement,
+    and a wide book on either leg moves it more than the signal does.
+    """
     atm_window: int = 5
     """Strikes either side of ATM used for pressure/PCR/liquidity measures."""
     wall_count: int = 3

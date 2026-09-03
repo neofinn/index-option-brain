@@ -77,6 +77,12 @@ class ConstituentSpec(BaseModel):
     index_symbol: str
     sector: str
     weight: Decimal
+    """Index weight in **percentage points**: HDFCBANK is 9.82, not 0.0982.
+
+    Stated because both conventions look equally plausible at a call site and
+    the wrong one fails silently — contributions come out 100x small, which
+    reads as a flat market rather than as an error.
+    """
 
 
 class ConstituentQuote(BaseModel):

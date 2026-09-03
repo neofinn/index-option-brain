@@ -36,6 +36,7 @@ from index_option_brain.contracts.provider import (
 )
 from index_option_brain.data.adapters.base import DataAdapterError
 from index_option_brain.data.adapters.nse_archive import NseArchiveAdapter
+from index_option_brain.data.adapters.nse_preopen import NsePreOpenAdapter
 from index_option_brain.data.adapters.nse_public import (
     NSE_PUBLIC_DESCRIPTOR,
     NsePublicAdapter,
@@ -143,7 +144,7 @@ class LiveEngine:
             )
             self._builder = MarketStateBuilder(
                 self._index,
-                None,
+                NsePreOpenAdapter(self._nse),
                 self._nse,
                 self._nse,
                 self._iv_history,
@@ -173,9 +174,13 @@ class LiveEngine:
             )
             self._builder = MarketStateBuilder(
                 self._index,
-                # No provider serves index breadth. Stated explicitly rather
-                # than omitted, so the gap is visible in the wiring.
-                None,
+                # Breadth comes from the pre-open auction board, which is the
+                # only constituent feed NSE serves this client
+                # (`/api/equity-stockIndices` is 404). It goes stale after the
+                # open by design and the adapter refuses it then, so the
+                # Constituent brain reports nothing rather than reading a
+                # morning snapshot as the afternoon market.
+                NsePreOpenAdapter(self._nse),
                 self._nse,
                 self._nse,
                 self._iv_history,

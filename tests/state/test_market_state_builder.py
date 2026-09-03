@@ -13,6 +13,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from index_option_brain.contracts.enums import MarketSessionState
+from index_option_brain.data.adapters.base import DataAdapterError
 from index_option_brain.data.adapters.mock import SimulatorDataAdapter
 from index_option_brain.state import InMemoryIvHistoryStore, MarketStateBuilder
 
@@ -214,3 +215,29 @@ class TestOpeningRange:
         opening_range = state.index_state.opening_range
         if opening_range is not None:
             assert opening_range.high >= opening_range.low
+
+
+class TestBreadthIsNotLoadBearing:
+    """Breadth is one of four domains and the only one sourced from a
+    session-bounded auction board. Its failure must cost the breadth
+    reading, never the state."""
+
+    async def test_a_failing_constituent_feed_still_builds_a_state(
+        self, adapter: SimulatorDataAdapter
+    ) -> None:
+        class _Broken:
+            async def get_constituents(self, index_symbol: str):
+                raise DataAdapterError("pre-open board unavailable")
+
+            async def get_constituent_quotes(self, symbols: list[str]):
+                raise DataAdapterError("pre-open board unavailable")
+
+        builder = MarketStateBuilder(
+            adapter, _Broken(), adapter, adapter, InMemoryIvHistoryStore()
+        )
+        state = await builder.build("NIFTY")
+
+        # The state exists and the other three domains are intact.
+        assert state.constituent_state.quotes == []
+        assert state.index_state.quote is not None
+        assert state.options_state.chain

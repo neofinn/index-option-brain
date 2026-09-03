@@ -20,14 +20,22 @@ What it does not serve
 ----------------------
 * **No greeks.** Only `impliedVolatility`. Delta, gamma, theta and vega are
   computed here from the live premium and IV via `analytics.pricing`, which is
-  why that module is production code rather than a test helper.
+  why that module is production code rather than a test helper. They are
+  computed against the **forward solved from put-call parity**, not against
+  spot: NIFTY's forward is set by the futures and stood 43.7 points above
+  spot on 3 Sep 2026 against a carry of 22.4. Pricing off spot pushes that
+  gap into the volatility — the same strike solved to a 10.6% call IV and an
+  8.7% put IV — and biases every delta derived from it.
 * **No historical bars.** `/api/historical/indicesHistory` answers an
   automated client with an anti-bot HTML interstitial. `get_index_bars`
   raises instead of inventing candles; bars come from a broker adapter, or
   from aggregating live snapshots forward.
-* **No constituent quotes.** `/api/equity-stockIndices` returns 404 for this
-  client, so breadth from NSE public is unavailable and the Constituent brain
-  must be fed by a broker adapter.
+* **No live constituent quotes.** `/api/equity-stockIndices` returns 404 for
+  this client, so intraday breadth is unavailable here. It is not entirely
+  unavailable: `/api/market-data-pre-open` serves all 50 constituents during
+  the opening auction, which `nse_preopen.NsePreOpenAdapter` reads. That
+  covers 09:00-09:15 and goes stale afterwards; continuous breadth still
+  needs a broker adapter.
 * **No account or order placement.** It is a data source, not a broker.
 
 Operational notes
@@ -54,6 +62,8 @@ from typing import TYPE_CHECKING, Any, Self
 
 from index_option_brain.analytics.pricing import (
     DEFAULT_RISK_FREE_RATE,
+    ForwardEstimate,
+    forward_from_parity,
     greeks_from_iv,
     implied_volatility,
 )
@@ -255,6 +265,19 @@ NSE_PUBLIC_DESCRIPTOR = ProviderDescriptor(
 )
 
 
+def _book_mid(leg: dict[str, Any]) -> float | None:
+    """Mid of a two-sided book, or None when either side is missing.
+
+    None, never the last traded price: parity needs both legs priced at the
+    same instant, and a last trade is priced at whenever it happened.
+    """
+    bid = _optional_decimal(leg.get("buyPrice1"))
+    ask = _optional_decimal(leg.get("sellPrice1"))
+    if bid is None or ask is None or bid <= 0 or ask <= 0 or ask < bid:
+        return None
+    return float((bid + ask) / 2)
+
+
 def _to_decimal(value: Any, field: str) -> Decimal:
     """Convert a JSON number to Decimal via its string form.
 
@@ -412,6 +435,7 @@ class NsePublicAdapter(IndexDataAdapter, OptionsChainAdapter, VolatilityDataAdap
         self._prefer_published_iv = prefer_published_iv
         self._max_spread_for_iv = Decimal(str(max_relative_spread_for_iv))
         self._warmed_up = False
+        self._last_forward: dict[tuple[str, date], ForwardEstimate | None] = {}
         self._lock = asyncio.Lock()
         self._indices_cache: tuple[float, dict[str, Any]] | None = None
 
@@ -643,6 +667,15 @@ class NsePublicAdapter(IndexDataAdapter, OptionsChainAdapter, VolatilityDataAdap
         spot = _to_decimal(records.get("underlyingValue"), "underlyingValue")
         years = years_to_expiry(as_of=as_of, expiry=expiry)
 
+        # Solve the market's forward before pricing anything off it. NIFTY's
+        # forward is set by the futures and is not spot * exp(rate * years):
+        # pricing off spot alone pushes the difference into the volatility,
+        # making a call and a put at the same strike solve to different IVs
+        # and biasing every delta computed from them.
+        forward = self._forward(rows=rows, spot=spot, years=years)
+        self._last_forward[(symbol, expiry)] = forward
+        carry = forward.dividend_yield if forward is not None else 0.0
+
         quotes: list[OptionQuote] = []
         for row in rows:
             if not isinstance(row, dict):
@@ -668,6 +701,7 @@ class NsePublicAdapter(IndexDataAdapter, OptionsChainAdapter, VolatilityDataAdap
                         as_of=as_of,
                         spot=spot,
                         years=years,
+                        dividend_yield=carry,
                     )
                 )
 
@@ -690,6 +724,7 @@ class NsePublicAdapter(IndexDataAdapter, OptionsChainAdapter, VolatilityDataAdap
         as_of: datetime,
         spot: Decimal,
         years: float,
+        dividend_yield: float = 0.0,
     ) -> OptionQuote:
         contract = OptionContractSpec(
             underlying_symbol=symbol,
@@ -711,6 +746,7 @@ class NsePublicAdapter(IndexDataAdapter, OptionsChainAdapter, VolatilityDataAdap
             option_type=option_type,
             bid=bid,
             ask=ask,
+            dividend_yield=dividend_yield,
         )
 
         greeks: Greeks | None = None
@@ -722,6 +758,7 @@ class NsePublicAdapter(IndexDataAdapter, OptionsChainAdapter, VolatilityDataAdap
                 iv_percent=float(iv),
                 option_type=option_type,
                 rate=self._rate,
+                dividend_yield=dividend_yield,
             )
             greeks = Greeks(
                 delta=Decimal(str(round(computed.delta, 6))),
@@ -748,6 +785,47 @@ class NsePublicAdapter(IndexDataAdapter, OptionsChainAdapter, VolatilityDataAdap
             greeks=greeks,
         )
 
+    def _forward(
+        self,
+        *,
+        rows: list[Any],
+        spot: Decimal,
+        years: float,
+    ) -> ForwardEstimate | None:
+        """The expiry's forward from put-call parity, or None.
+
+        Only strikes with a two-sided book on *both* legs are offered to the
+        solver. A parity difference computed from a last-traded price is a
+        difference between two moments, not between two prices, and it is
+        exactly the stale-print problem that made NSE's published IV unusable.
+        """
+        pairs: list[tuple[float, float, float]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            strike_raw = row.get("strikePrice")
+            call, put = row.get("CE"), row.get("PE")
+            if strike_raw is None or not isinstance(call, dict) or not isinstance(put, dict):
+                continue
+            call_mid = _book_mid(call)
+            put_mid = _book_mid(put)
+            if call_mid is None or put_mid is None:
+                continue
+            pairs.append((float(strike_raw), call_mid, put_mid))
+
+        return forward_from_parity(
+            pairs=pairs, spot=float(spot), years=years, rate=self._rate
+        )
+
+    def last_forward(self, symbol: str, expiry: date) -> ForwardEstimate | None:
+        """The forward solved on the most recent chain fetch, if any.
+
+        Exposed so the builder can put the basis into MarketState without
+        re-solving it, and so an operator can see the number the greeks were
+        computed against.
+        """
+        return self._last_forward.get((symbol.upper(), expiry))
+
     def _resolve_iv(
         self,
         *,
@@ -758,6 +836,7 @@ class NsePublicAdapter(IndexDataAdapter, OptionsChainAdapter, VolatilityDataAdap
         option_type: OptionType,
         bid: Decimal | None,
         ask: Decimal | None,
+        dividend_yield: float = 0.0,
     ) -> Decimal | None:
         """The strike's implied volatility in percentage points, or None.
 
@@ -802,6 +881,7 @@ class NsePublicAdapter(IndexDataAdapter, OptionsChainAdapter, VolatilityDataAdap
             years=years,
             option_type=option_type,
             rate=self._rate,
+            dividend_yield=dividend_yield,
         )
         if derived is None:
             return None
