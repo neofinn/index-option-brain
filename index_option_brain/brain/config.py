@@ -187,6 +187,29 @@ class StrikeEngineConfig(_Config):
     wall_penalty: float = 0.25
     """Score penalty for buying directly into a call/put wall."""
     min_open_interest: int = 5_000
+    min_long_leg_delta: float = 0.30
+    """Hard floor on |delta| for a bought leg in a **debit** structure. A
+    rejection, not a score.
+
+    Below 0.30 a bought option is mostly extrinsic value with little
+    directional participation: the index has to travel a long way before the
+    position responds at all, theta is charged the whole time, and a
+    delta-fit score alone would let such a strike through as merely
+    lower-ranked rather than excluded — which still lets it win by being the
+    best of a bad set.
+
+    Two exemptions, both because the rule is about *paying premium as the
+    trade*:
+
+    * A **credit** structure's long leg is insurance, not the expression. It
+      is deliberately bought far out of the money and cheap; requiring 0.30
+      there would make every defined-risk credit spread unbuildable and
+      leave only naked short options, which is the opposite of safer.
+    * A **short** leg at 0.20-0.25 delta is the premium-selling trade working
+      as intended.
+
+    Set to 0.0 to disable.
+    """
     liquidity_weight: float = 0.35
     delta_fit_weight: float = 0.4
     structure_weight: float = 0.25

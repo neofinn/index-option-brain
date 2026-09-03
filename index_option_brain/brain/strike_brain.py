@@ -149,6 +149,31 @@ class DeterministicStrikeEngine(StrikeEngine):
             if quote.bid is None or quote.ask is None:
                 return "not two-sided"
 
+            # The delta floor, on the leg that *is* the trade. A rejection
+            # rather than a score: below 0.30 a bought option is mostly
+            # extrinsic, so the index must travel a long way before the
+            # position responds while theta is charged throughout. Ranking it
+            # merely lower would still let it win by being the best of a bad
+            # set.
+            #
+            # Only on debit structures. A credit spread's long leg is
+            # insurance rather than the expression — deliberately far out of
+            # the money and cheap — and requiring 0.30 there would make every
+            # defined-risk credit spread unbuildable, leaving only naked
+            # shorts. That is the opposite of safer.
+            if (
+                leg.side is OrderSide.BUY
+                and not candidate.is_credit
+                and cfg.min_long_leg_delta > 0
+            ):
+                if leg.delta is None:
+                    return "bought leg has no delta to check against the floor"
+                if abs(float(leg.delta)) < cfg.min_long_leg_delta:
+                    return (
+                        f"bought leg delta {abs(float(leg.delta)):.2f} is below "
+                        f"the {cfg.min_long_leg_delta:.2f} floor"
+                    )
+
         if candidate.max_loss <= 0:
             return "non-positive max loss"
         return None

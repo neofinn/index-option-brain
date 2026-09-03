@@ -53,7 +53,7 @@ switch, and the engine must never require it to exist.
 | Database schema | `Base` + UUID/timestamp/version mixin only — the ~27 tables from §27 are not yet modeled |
 | FastAPI app + operations console | **Implemented** — live status/providers/market/analysis endpoints, `index_option_brain/app/static/console.html` |
 
-1,097 tests pass; `ruff` and `mypy --strict` are clean.
+1,115 tests pass; `ruff` and `mypy --strict` are clean.
 
 ### Where the pipeline deliberately stops
 
