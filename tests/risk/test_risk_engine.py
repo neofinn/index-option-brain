@@ -22,8 +22,10 @@ from index_option_brain.contracts.enums import (
     StrategyType,
     TradeLifecycleState,
 )
+from index_option_brain.contracts.instruments import Greeks
 from index_option_brain.contracts.position import Position, PositionLeg
 from index_option_brain.contracts.risk import (
+    PortfolioState,
     RiskDecision,
     RiskReasonCode,
     ScheduledEvent,
@@ -573,3 +575,112 @@ class TestDecisionHelpers:
     @pytest.mark.parametrize("code", list(RiskReasonCode))
     def test_every_reason_code_round_trips(self, code: RiskReasonCode):
         assert RiskReasonCode(code.value) is code
+
+
+class TestDeltaExposureLimit:
+    """Directional exposure is a separate limit from committed loss.
+
+    The committed-loss limit caps what the book can *lose*; this caps what
+    it is *exposed to*. For long premium the two diverge sharply: three
+    defined-risk calls can lose very little and carry crores of delta.
+    """
+
+    def _long_position(self, *, lots: int, delta: float, gamma: float) -> Position:
+        spec = contract(24100)
+        return Position(
+            position_id=f"p-{lots}",
+            thesis_id="t",
+            state=TradeLifecycleState.ACTIVE,
+            strategy=StrategyType.LONG_CALL,
+            thesis_direction=Direction.BULLISH,
+            legs=[
+                PositionLeg(
+                    contract=spec,
+                    side=OrderSide.BUY,
+                    # PositionLeg counts units, not lots.
+                    quantity=lots * LOT_SIZE,
+                    average_price=Decimal(90),
+                    greeks=Greeks(
+                        delta=Decimal(str(delta)),
+                        gamma=Decimal(str(gamma)),
+                        theta=Decimal("-7.9"),
+                        vega=Decimal("11.3"),
+                    ),
+                )
+            ],
+            max_loss=Decimal(90) * lots * LOT_SIZE,
+            opened_at=NOW,
+            updated_at=NOW,
+        )
+
+    def _portfolio(self, positions: list[Position], account) -> PortfolioState:
+        return PortfolioState(
+            account=account,
+            open_positions=positions,
+            spot_by_underlying={"NIFTY": Decimal(24000)},
+        )
+
+    def test_a_modest_book_passes_and_reports_its_greeks(
+        self, trade, default_account
+    ):
+        portfolio = self._portfolio(
+            [self._long_position(lots=1, delta=0.45, gamma=0.0013)], default_account
+        )
+        decision = engine().authorize(trade, default_account, portfolio)
+
+        assert RiskReasonCode.DELTA_EXPOSURE_LIMIT_REACHED not in decision.reason_codes
+        assert any("Delta notional" in line for line in decision.evidence)
+        assert any("theta" in line for line in decision.evidence)
+
+    def test_an_enormous_book_is_rejected_on_exposure_not_on_loss(
+        self, trade, default_account
+    ):
+        """The committed max loss here is small — it is the delta that is
+        the problem, and only this limit can see it."""
+        portfolio = self._portfolio(
+            [
+                self._long_position(lots=40, delta=0.9, gamma=0.0004),
+                self._long_position(lots=40, delta=0.9, gamma=0.0004),
+            ],
+            default_account,
+        )
+        decision = engine().authorize(trade, default_account, portfolio)
+
+        assert RiskReasonCode.DELTA_EXPOSURE_LIMIT_REACHED in decision.reason_codes
+        assert decision.approved is False
+
+    def test_an_unmarked_leg_makes_the_reading_a_floor_not_a_rejection(
+        self, trade, default_account
+    ):
+        """A feed hiccup must not become a trading halt, but the limit that
+        follows has to be read as the lower bound it is."""
+        naked = self._long_position(lots=1, delta=0.45, gamma=0.0013)
+        blind = naked.model_copy(
+            update={
+                "position_id": "p-blind",
+                "legs": [naked.legs[0].model_copy(update={"greeks": None})],
+            }
+        )
+        portfolio = self._portfolio([naked, blind], default_account)
+        decision = engine().authorize(trade, default_account, portfolio)
+
+        assert RiskReasonCode.DELTA_EXPOSURE_LIMIT_REACHED not in decision.reason_codes
+        assert any("lower bound" in line for line in decision.evidence)
+
+    def test_an_empty_book_is_silent_rather_than_passing_on_an_absence(
+        self, trade, default_account, empty_portfolio
+    ):
+        decision = engine().authorize(trade, default_account, empty_portfolio)
+        assert RiskReasonCode.DELTA_EXPOSURE_LIMIT_REACHED not in decision.reason_codes
+        assert not any("Delta notional" in line for line in decision.evidence)
+
+    def test_positions_without_a_spot_contribute_no_rupee_exposure(
+        self, trade, default_account
+    ):
+        """A stale price must never be substituted for a missing one."""
+        portfolio = PortfolioState(
+            account=default_account,
+            open_positions=[self._long_position(lots=1, delta=0.45, gamma=0.0013)],
+            spot_by_underlying={},
+        )
+        assert portfolio.exposure().by_underlying == {}

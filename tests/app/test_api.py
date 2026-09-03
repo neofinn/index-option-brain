@@ -493,3 +493,13 @@ class TestCaptureSurface:
 
         cycle = client.get("/api/history/NIFTY").json()["cycles"][0]
         assert "basis_score" in cycle
+
+
+class TestExposureSurface:
+    def test_exposure_states_why_it_is_absent(self, client: TestClient) -> None:
+        """An exposure figure without an account would be invented, and it
+        is the most dangerous kind of placeholder — it would read as a
+        measured risk."""
+        body = client.get("/api/analysis/NIFTY").json()
+        assert body["exposure"]["available"] is False
+        assert "No broker connected" in body["exposure"]["reason"]

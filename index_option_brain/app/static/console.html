@@ -412,6 +412,20 @@
     </section>
 
     <section class="card">
+      <header><h2>Portfolio exposure</h2><div class="spacer"></div>
+        <span class="pill idle" id="exp-pill"><span id="exp-state">—</span></span></header>
+      <div class="big" id="exp-delta">—</div>
+      <div class="sub">net delta notional</div>
+      <div class="rows" id="exp-rows" hidden>
+        <div class="row"><span class="k">Gross delta</span><span class="v" id="exp-gross">—</span></div>
+        <div class="row"><span class="k">Theta</span><span class="v" id="exp-theta">—</span></div>
+        <div class="row"><span class="k">Vega</span><span class="v" id="exp-vega">—</span></div>
+        <div class="row"><span class="k">Unmarked legs</span><span class="v" id="exp-blind">—</span></div>
+      </div>
+      <p class="empty" id="exp-note"></p>
+    </section>
+
+    <section class="card">
       <header><h2>Backtest corpus</h2><div class="spacer"></div>
         <span class="pill idle" id="cap-pill"><span id="cap-state">—</span></span></header>
       <div class="big" id="cap-sessions">—</div>
@@ -898,6 +912,33 @@ async function renderHistory(symbol) {
 
 function renderAnalysis(analysis) {
   if (!analysis.available) return;
+
+  // Directional exposure, which is a different limit from committed loss:
+  // three defined-risk calls can lose little and carry crores of delta.
+  const exp = analysis.exposure;
+  if (!exp || !exp.available) {
+    $("exp-delta").textContent = "—";
+    $("exp-delta").className = "big";
+    $("exp-rows").hidden = true;
+    pill("exp-pill", "exp-state", "no positions", "idle");
+    $("exp-note").textContent = (exp && exp.reason) || "";
+  } else {
+    const lakh = (n) => (n / 100000).toFixed(1) + "L";
+    $("exp-delta").textContent = signed(exp.delta_notional / 100000, 1) + "L";
+    $("exp-delta").className = "big " + (exp.delta_notional > 0 ? "up" : exp.delta_notional < 0 ? "down" : "");
+    $("exp-rows").hidden = false;
+    $("exp-gross").textContent = lakh(exp.gross_delta_notional);
+    $("exp-theta").textContent = signed(exp.theta_rupees_per_day, 0) + " /day";
+    $("exp-vega").textContent = signed(exp.vega_rupees_per_iv_point, 0) + " /IV pt";
+    $("exp-blind").textContent = exp.unmeasured_legs;
+    // An incomplete reading is a floor, and has to say so — a limit that
+    // passes because a leg was invisible is worse than no limit.
+    pill("exp-pill", "exp-state", exp.complete ? "measured" : "incomplete",
+         exp.complete ? "ok" : "act");
+    $("exp-note").textContent = exp.complete
+      ? ""
+      : exp.unmeasured_legs + " leg(s) carry no greeks, so this is a lower bound.";
+  }
 
   const brains = analysis.brains;
   if (brains) {

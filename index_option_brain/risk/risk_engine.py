@@ -228,6 +228,13 @@ class DeterministicRiskEngine(RiskEngine):
                 f"{limits.max_positions_per_underlying}"
             )
 
+        # --- Directional exposure, tested where gamma is taking it
+        delta_codes, delta_evidence = self._delta_exposure_checks(
+            trade, portfolio, equity
+        )
+        codes.extend(delta_codes)
+        evidence.extend(delta_evidence)
+
         # --- Event risk
         event = self._blocking_event(trade, portfolio)
         if event is not None:
@@ -238,6 +245,94 @@ class DeterministicRiskEngine(RiskEngine):
             )
 
         return codes, evidence
+
+    def _delta_exposure_checks(
+        self,
+        trade: TradeCandidate,
+        portfolio: PortfolioState,
+        equity: Decimal,
+    ) -> tuple[list[RiskReasonCode], list[str]]:
+        """Cap directional exposure, checked against where gamma is taking it.
+
+        Distinct from the committed-loss limit above. That one caps what the
+        book can lose; this caps what it is exposed to, and the two diverge
+        sharply for long premium: three defined-risk calls can lose very
+        little and carry crores of delta notional.
+
+        The check runs on *projected* exposure. A long book's delta grows
+        into a favourable move, so a position inside its limit at entry can
+        breach it while the thesis is working — exposure nobody placed.
+        Testing only at entry tests the one moment it is guaranteed to pass.
+        """
+        limits = self._limits
+        codes: list[RiskReasonCode] = []
+        evidence: list[str] = []
+
+        exposure = portfolio.exposure()
+        if not exposure.by_underlying:
+            # An empty book, or one whose spots were not supplied. Either way
+            # there is nothing measured to compare, and saying so beats
+            # passing a limit on an absence.
+            return codes, evidence
+
+        if exposure.unmeasured_legs:
+            # Not a rejection: an unmarked leg is a data gap, and refusing
+            # every trade on one would make a feed hiccup a trading halt.
+            # It is recorded so the limit below is read as the floor it is.
+            evidence.append(
+                f"{exposure.unmeasured_legs} open leg(s) carry no greeks, so "
+                "portfolio delta is a lower bound"
+            )
+
+        multiple = exposure.delta_share_of_capital(equity)
+        if multiple is None:
+            return codes, evidence
+
+        one_sigma = self._one_sigma_by_underlying(trade, portfolio)
+        projected = exposure.projected_delta_notional(
+            limits.delta_projection_sigmas, one_sigma
+        )
+        projected_multiple = abs(projected) / float(equity) if equity > 0 else 0.0
+        ceiling = float(limits.max_delta_notional_multiple)
+
+        if multiple > ceiling or projected_multiple > ceiling:
+            codes.append(RiskReasonCode.DELTA_EXPOSURE_LIMIT_REACHED)
+            evidence.append(
+                f"Delta notional {exposure.gross_delta_notional:,.0f} is "
+                f"{multiple:.1f}x equity"
+                + (
+                    f", {projected_multiple:.1f}x after a "
+                    f"{limits.delta_projection_sigmas:.0f} sigma move"
+                    if projected_multiple > multiple
+                    else ""
+                )
+                + f" — limit {ceiling:.1f}x"
+            )
+        else:
+            evidence.append(
+                f"Delta notional {exposure.gross_delta_notional:,.0f} "
+                f"({multiple:.1f}x equity), theta "
+                f"{exposure.theta_rupees:+,.0f}/day, vega "
+                f"{exposure.vega_rupees:+,.0f}/IV point"
+            )
+        return codes, evidence
+
+    def _one_sigma_by_underlying(
+        self, trade: TradeCandidate, portfolio: PortfolioState
+    ) -> dict[str, float]:
+        """Each underlying's one-sigma move in index points.
+
+        Taken from the candidate's own expected move where it has one, so
+        the projection uses the volatility the chain is actually pricing.
+        An underlying with no measurement is left out and projected
+        unchanged, rather than moved by a borrowed sigma from a different
+        index — 100 points is a different event on NIFTY than on BANKNIFTY.
+        """
+        sigma: dict[str, float] = {}
+        expected = getattr(trade, "expected_move", None)
+        if expected is not None:
+            sigma[trade.underlying_symbol.upper()] = abs(float(expected))
+        return sigma
 
     def _blocking_event(
         self, trade: TradeCandidate, portfolio: PortfolioState

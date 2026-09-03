@@ -36,6 +36,24 @@ class RiskLimits(BaseModel):
     max_positions_per_underlying: int = 3
     max_portfolio_exposure: Decimal = Decimal("0.06")
     """Total committed max loss across open positions, as a fraction of equity."""
+    max_delta_notional_multiple: Decimal = Decimal("3.0")
+    """Gross delta notional allowed, as a multiple of equity.
+
+    A multiple, not a percentage: options give exposure far above the
+    premium paid, so three lots of a 90-rupee call cost ~17,500 and carry
+    over 20 lakh of delta notional. Anyone reading "1,200%" would assume a
+    bug. 3x is deliberately loose — it is a backstop against an
+    accidentally enormous book, not a position-sizing rule.
+    """
+    delta_projection_sigmas: float = 1.0
+    """How far ahead the delta limit is tested, in one-sigma moves.
+
+    Checked against *projected* exposure because gamma means a book sized
+    correctly at entry is oversized once the thesis works: a 0.383-delta
+    call becomes 0.533 delta on a 100-point rally, 39% more exposure that
+    nobody chose. A limit tested only at entry is tested at the one moment
+    it is guaranteed to pass.
+    """
     max_concentration_per_underlying: Decimal = Decimal("0.04")
 
     # ---- Margin

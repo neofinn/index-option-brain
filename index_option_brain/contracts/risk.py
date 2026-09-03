@@ -18,6 +18,12 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from index_option_brain.analytics.exposure import (
+    LegExposure,
+    PortfolioExposure,
+    leg_exposure,
+    portfolio_exposure,
+)
 from index_option_brain.contracts.enums import Direction, StrategyType
 from index_option_brain.contracts.instruments import AccountSnapshot
 from index_option_brain.contracts.position import Position
@@ -41,6 +47,14 @@ class RiskReasonCode(StrEnum):
     STRATEGY_LIMIT_REACHED = "STRATEGY_LIMIT_REACHED"
     INSTRUMENT_LIMIT_REACHED = "INSTRUMENT_LIMIT_REACHED"
     EXPOSURE_LIMIT_REACHED = "EXPOSURE_LIMIT_REACHED"
+    DELTA_EXPOSURE_LIMIT_REACHED = "DELTA_EXPOSURE_LIMIT_REACHED"
+    """Directional exposure, which is a different limit from committed loss.
+
+    EXPOSURE_LIMIT_REACHED caps what the book can *lose*. This caps what it
+    is *exposed to*: three long calls have a small combined max loss and can
+    carry crores of delta notional. A defined-risk book is not a
+    small-exposure book.
+    """
     CONCENTRATION_LIMIT_REACHED = "CONCENTRATION_LIMIT_REACHED"
 
     # Market quality
@@ -85,6 +99,14 @@ class PortfolioState(BaseModel):
     daily_unrealized_pnl: Decimal = Decimal(0)
     committed_margin: Decimal = Decimal(0)
     scheduled_events: list[ScheduledEvent] = Field(default_factory=list)
+    spot_by_underlying: dict[str, Decimal] = Field(default_factory=dict)
+    """Current spot per underlying, for valuing delta exposure in rupees.
+
+    Carried on the state rather than looked up, so a stale price cannot be
+    substituted for a missing one: an underlying absent here contributes no
+    rupee exposure and is reported as unmeasured, instead of being valued at
+    whatever the last snapshot happened to hold.
+    """
 
     @property
     def open_position_count(self) -> int:
@@ -96,6 +118,36 @@ class PortfolioState(BaseModel):
 
     def count_for_strategy(self, strategy: StrategyType) -> int:
         return sum(1 for p in self.open_positions if p.strategy is strategy)
+
+    def exposure(self) -> PortfolioExposure:
+        """Net greeks across every open position.
+
+        Built from the legs' own greeks, so a leg that could not be marked
+        makes the aggregate incomplete rather than contributing zero. The
+        Risk Engine checks `is_complete` before treating a limit as passed.
+        """
+        entries: list[tuple[LegExposure, Decimal]] = []
+        for position in self.open_positions:
+            if not position.is_open:
+                continue
+            for leg in position.legs:
+                symbol = leg.contract.underlying_symbol.upper()
+                spot = self.spot_by_underlying.get(symbol)
+                if spot is None:
+                    continue
+                entries.append(
+                    (
+                        leg_exposure(
+                            contract=leg.contract,
+                            side=leg.side,
+                            greeks=leg.greeks,
+                            # PositionLeg counts units; StrikeLeg counts lots.
+                            units=leg.quantity,
+                        ),
+                        spot,
+                    )
+                )
+        return portfolio_exposure(entries)
 
     def count_for_underlying(self, symbol: str) -> int:
         return sum(

@@ -20,7 +20,7 @@ from index_option_brain.contracts.enums import (
     StrategyType,
     TradeLifecycleState,
 )
-from index_option_brain.contracts.instruments import OptionContractSpec
+from index_option_brain.contracts.instruments import Greeks, OptionContractSpec
 
 
 class PositionLeg(BaseModel):
@@ -29,8 +29,22 @@ class PositionLeg(BaseModel):
     contract: OptionContractSpec
     side: OrderSide
     quantity: int
+    """Contract **units**, not lots.
+
+    Stated because `StrikeLeg.lots` — the contract this one is built from —
+    counts lots, and reading one as the other is a `lot_size` error (65x on
+    NIFTY) that produces a plausible number rather than an obvious one.
+    `analytics.exposure.leg_exposure` refuses to guess between them.
+    """
     average_price: Decimal
     current_price: Decimal | None = None
+    greeks: Greeks | None = None
+    """Greeks as of the last mark, or None when they could not be computed.
+
+    None rather than zero: a delta of zero is a hedged leg, an absent delta
+    is an unmeasured one, and portfolio exposure reports the difference
+    rather than letting an invisible leg pass a limit.
+    """
 
     @property
     def signed_quantity(self) -> int:

@@ -113,6 +113,45 @@ def _describe(provider: ProviderDescriptor, health: Any) -> dict[str, Any]:
     }
 
 
+def _exposure_payload(live: LiveEngine) -> dict[str, Any]:
+    """Portfolio greeks, or a stated absence.
+
+    The Risk Engine caps directional exposure separately from committed
+    loss, and the two diverge sharply for long premium — three defined-risk
+    calls can lose little and carry crores of delta. An operator has to be
+    able to see the number the limit is judging, so this reports why it is
+    absent rather than omitting the key.
+    """
+    portfolio = getattr(live, "portfolio", None)
+    if portfolio is None:
+        return {
+            "available": False,
+            "reason": (
+                "No broker connected, so there are no positions to measure. "
+                "An exposure figure without an account would be invented."
+            ),
+        }
+    exposure = portfolio.exposure()
+    return {
+        "available": True,
+        "complete": exposure.is_complete,
+        "unmeasured_legs": exposure.unmeasured_legs,
+        "delta_notional": exposure.delta_notional,
+        "gross_delta_notional": exposure.gross_delta_notional,
+        "theta_rupees_per_day": exposure.theta_rupees,
+        "vega_rupees_per_iv_point": exposure.vega_rupees,
+        "by_underlying": {
+            symbol: {
+                "delta_units": each.delta_units,
+                "delta_notional": each.delta_notional,
+                "gamma_units": each.gamma_units,
+                "unmeasured_legs": each.unmeasured_legs,
+            }
+            for symbol, each in exposure.by_underlying.items()
+        },
+    }
+
+
 def _capture_from(settings: Settings) -> CaptureRecorder | None:
     """The capture recorder configured for this process, or None.
 
@@ -515,6 +554,10 @@ def create_app(
             # cannot see without a broker, so this is always false for now —
             # and says so rather than being omitted.
             "is_authorized": result.is_authorized,
+            # Portfolio greeks. Empty while no broker is connected: with no
+            # account there are no positions, and inventing an exposure
+            # figure would be the most dangerous kind of placeholder.
+            "exposure": _exposure_payload(live),
             "authorization_blocked_reason": (
                 None
                 if result.risk_decision is not None
