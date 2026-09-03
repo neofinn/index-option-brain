@@ -78,8 +78,10 @@ class TestNoTradeAlwaysValid:
 
 
 class TestVolatilityAwareExpression:
-    def test_rich_premium_prefers_collecting_it(self, uptrend_state: MarketState):
-        result = run(uptrend_state)
+    def test_rich_premium_prefers_collecting_it(
+        self, rich_volatility_state: MarketState
+    ):
+        result = run(rich_volatility_state)
         assert result.analysis.volatility.iv_score > 0.25
         assert result.signal.direction is Direction.BULLISH
         assert result.selected_strategy in _CREDIT
@@ -91,11 +93,11 @@ class TestVolatilityAwareExpression:
         assert result.selected_strategy is not StrategyType.NO_TRADE
 
     def test_the_same_direction_produces_different_structures_by_volatility(
-        self, uptrend_state: MarketState, cheap_volatility_state: MarketState
+        self, rich_volatility_state: MarketState, cheap_volatility_state: MarketState
     ):
         """The point of the engine: direction alone does not determine the
         trade."""
-        rich = run(uptrend_state)
+        rich = run(rich_volatility_state)
         cheap = run(cheap_volatility_state)
         assert rich.signal.direction is cheap.signal.direction is Direction.BULLISH
         assert rich.selected_strategy is not cheap.selected_strategy

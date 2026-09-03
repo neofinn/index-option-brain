@@ -105,6 +105,24 @@ class OptionsState(BaseModel):
 class VolatilityState(BaseModel):
     model_config = ConfigDict(frozen=True)
 
+    realized_estimator: str | None = None
+    """How `realized_volatility` was measured, e.g. "yang_zhang".
+
+    Carried because "realized volatility is 11%" is not a fact on its own: a
+    20-session Yang-Zhang number and a 90-session close-to-close number over
+    the same market can differ by a third, and a comparison against implied
+    only means something if both sides describe the same horizon.
+    """
+    realized_window: int | None = None
+    """Sessions the realized measurement covers, matched to the option tenor."""
+    volatility_risk_premium: float | None = None
+    """Implied minus realized, in volatility points, or None if unmeasured.
+
+    Positive: options price more movement than the index has delivered —
+    expensive, favouring sellers. Negative: the index has moved more than
+    options price — cheap, and this system's side of the trade.
+    """
+
     india_vix: float | None = None
     india_vix_previous_close: float | None = None
     india_vix_year_high: float | None = None

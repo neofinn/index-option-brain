@@ -100,12 +100,26 @@ class DeterministicVolatilityEngine(VolatilityEngine):
         realized = volatility_state.realized_volatility
         iv_rv_ratio = None
         iv_score = 0.0
+        premium = volatility_state.volatility_risk_premium
+        vrp_score: float | None = None
+        if premium is not None:
+            # Scaled, not thresholded: a mild premium should contribute a
+            # small number rather than nothing.
+            vrp_score = ind.clamp(premium / cfg.vrp_full_scale_points)
+
         if atm_iv is not None and realized is not None and realized > 0:
             iv_rv_ratio = atm_iv / realized
             iv_score = ind.squash(iv_rv_ratio - 1.0, cfg.iv_rv_scale)
             richness = "rich" if iv_score > 0 else "cheap"
             evidence.append(
-                f"IV/RV {iv_rv_ratio:.2f} (realized {realized:.2f}%) — premium looks {richness}"
+                f"IV/RV {iv_rv_ratio:.2f} — implied {atm_iv:.2f}% against "
+                f"{volatility_state.realized_window}-session realized "
+                f"{realized:.2f}% "
+                f"({volatility_state.realized_estimator}), "
+                f"premium {premium:+.2f} points, looks {richness}"
+                if premium is not None
+                else f"IV/RV {iv_rv_ratio:.2f} (realized {realized:.2f}%) — "
+                f"premium looks {richness}"
             )
         elif iv_percentile is not None:
             # No realized volatility to compare against — which is the state
@@ -166,6 +180,10 @@ class DeterministicVolatilityEngine(VolatilityEngine):
             atm_iv=atm_iv,
             iv_percentile=iv_percentile,
             realized_volatility=realized,
+            realized_estimator=volatility_state.realized_estimator,
+            realized_window=volatility_state.realized_window,
+            volatility_risk_premium=premium,
+            vrp_score=vrp_score,
             iv_rv_ratio=iv_rv_ratio,
             days_to_expiry=days_to_expiry,
             evidence=evidence,

@@ -185,6 +185,26 @@ class VolatilityAnalysis(BaseModel):
     atm_iv: float | None = None
     iv_percentile: float | None = None
     realized_volatility: float | None = None
+    realized_estimator: str | None = None
+    """How realized was measured. See VolatilityState.realized_estimator."""
+    realized_window: int | None = None
+    """Sessions covered, matched to the option's own tenor."""
+    volatility_risk_premium: float | None = None
+    """Implied minus realized in volatility points, or None if unmeasured.
+
+    A first-class number rather than a phrase inside `evidence`, so the
+    Strategy Engine can read it. Negative is the buyer's condition: the
+    index has been moving more than options are pricing.
+    """
+    vrp_score: float | None = None
+    """The premium normalised to [-1, 1], or None if unmeasured.
+
+    Distinct from `iv_score`. That one ranks IV against its own history —
+    "is premium dear for this market". This one compares it against what the
+    index actually delivered over the same horizon — "is premium dear for
+    what you are getting". A market can be at the 12th percentile of its own
+    IV range and still be expensive relative to a dead tape.
+    """
     iv_rv_ratio: float | None = None
     days_to_expiry: float | None = None
     evidence: list[str] = Field(default_factory=list)

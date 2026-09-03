@@ -425,6 +425,7 @@ class LiveEngine:
                         "strategy": row.strategy,
                         "is_actionable": row.is_actionable,
                         "basis_score": row.basis_score,
+                        "vrp_score": row.vrp_score,
                         "index_confidence": row.index_confidence,
                     }
                     for row in rows

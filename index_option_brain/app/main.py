@@ -332,6 +332,9 @@ def create_app(
                 "india_vix_previous_close": volatility.india_vix_previous_close,
                 "atm_iv": volatility.atm_iv,
                 "realized_volatility": volatility.realized_volatility,
+                "realized_estimator": volatility.realized_estimator,
+                "realized_window": volatility.realized_window,
+                "volatility_risk_premium": volatility.volatility_risk_premium,
                 "days_to_expiry": volatility.days_to_expiry,
                 "iv_observations": len(volatility.atm_iv_history),
             },
@@ -481,6 +484,17 @@ def create_app(
                 "volatility": {
                     "regime": str(result.analysis.volatility.regime),
                     "atm_iv": result.analysis.volatility.atm_iv,
+                    "realized_volatility": (
+                        result.analysis.volatility.realized_volatility
+                    ),
+                    "realized_estimator": (
+                        result.analysis.volatility.realized_estimator
+                    ),
+                    "realized_window": result.analysis.volatility.realized_window,
+                    "volatility_risk_premium": (
+                        result.analysis.volatility.volatility_risk_premium
+                    ),
+                    "vrp_score": result.analysis.volatility.vrp_score,
                     "iv_percentile": result.analysis.volatility.iv_percentile,
                     "expected_move": (
                         float(result.analysis.volatility.expected_move)

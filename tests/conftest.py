@@ -112,6 +112,30 @@ def narrow_rally_state() -> MarketState:
 
 
 @pytest.fixture
+def rich_volatility_state() -> MarketState:
+    """IV above realized, so premium is dear and credit structures fit.
+
+    The calm tape is explicit rather than inherited. These tests used to run
+    on `uptrend_state`, whose richness came entirely from how realized
+    volatility was being measured: close-to-close over the whole ninety-bar
+    window, against the implied volatility of an expiry days away. Measuring
+    realized over a window matched to the tenor — and with an estimator that
+    accounts for the overnight gap — showed the same fixture to be *cheap*,
+    not rich.
+
+    So the premise is now built into the data: a quiet 0.35% daily tape
+    under a 14% implied surface, which is a genuine volatility risk premium
+    rather than an artifact of a horizon mismatch.
+    """
+    return build_state(
+        daily_drift_pct=0.35,
+        intraday_drift_pct=2.0,
+        breadth_bias=0.6,
+        daily_volatility_pct=0.35,
+    )
+
+
+@pytest.fixture
 def cheap_volatility_state() -> MarketState:
     """IV below realized, so premium is cheap and debit structures fit."""
     return build_state(

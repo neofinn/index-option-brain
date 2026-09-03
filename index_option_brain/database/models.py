@@ -266,6 +266,9 @@ class AnalysisCycle(Base, Recorded):
     options_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     volatility_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     basis_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    vrp_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    """Volatility risk premium, normalised. NULL when either side was
+    unmeasured — a premium of zero means implied matched realized."""
 
     candidate: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     """The ranked structure, or NULL when nothing was ranked.

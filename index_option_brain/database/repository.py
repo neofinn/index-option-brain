@@ -214,6 +214,7 @@ class SnapshotRepository:
             options_confidence=analysis.options.confidence if analysis else None,
             volatility_confidence=analysis.volatility.confidence if analysis else None,
             basis_score=analysis.options.basis_score if analysis else None,
+            vrp_score=analysis.volatility.vrp_score if analysis else None,
             candidate=(
                 {
                     "strategy": str(candidate.strategy),

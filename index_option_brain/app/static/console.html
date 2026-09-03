@@ -337,6 +337,8 @@
       <div class="rows">
         <div class="row"><span class="k">ATM implied</span><span class="v" id="atm-iv">—</span></div>
         <div class="row"><span class="k">Realized</span><span class="v" id="rv">—</span></div>
+        <div class="row"><span class="k">Estimator</span><span class="v" id="rv-how">—</span></div>
+        <div class="row"><span class="k">Risk premium</span><span class="v" id="vrp">—</span></div>
         <div class="row"><span class="k">IV history</span><span class="v" id="iv-obs">—</span></div>
         <div class="row"><span class="k">Days to expiry</span><span class="v" id="dte">—</span></div>
       </div>
@@ -790,6 +792,30 @@ function renderMarket(market) {
       : (cov.sessions ?? 0) < 20
         ? "A P&L backtest needs many sessions of chains. Nothing free serves them historically, so this only grows while the process runs."
         : "";
+  }
+
+  // Implied minus realized, horizon-matched. The estimator and window are
+  // shown because "realized is 11%" is not a fact on its own — a 20-session
+  // gap-aware number and a 90-session close-to-close one over the same
+  // market can differ by a third.
+  const vol = market.volatility;
+  if (vol.realized_estimator) {
+    $("rv-how").textContent =
+      vol.realized_estimator.replace(/_/g, "-") + " over " + vol.realized_window + "d";
+    $("rv-how").classList.remove("na");
+  } else {
+    $("rv-how").textContent = "not measured";
+    $("rv-how").classList.add("na");
+  }
+  const vrp = vol.volatility_risk_premium;
+  if (vrp === null || vrp === undefined) {
+    $("vrp").textContent = "not measured";
+    $("vrp").className = "v na";
+  } else {
+    // Positive: options price more movement than the index delivered, so
+    // premium is dear. Negative is the buyer's condition.
+    $("vrp").textContent = signed(vrp, 2) + " pts " + (vrp > 0 ? "dear" : "cheap");
+    $("vrp").className = "v " + (vrp > 0 ? "down" : "up");
   }
 
   const fwd = market.forward;

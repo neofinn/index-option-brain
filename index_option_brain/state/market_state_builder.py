@@ -14,13 +14,18 @@ against IST because that is what defines the Indian trading day.
 
 from __future__ import annotations
 
-import math
 from abc import ABC, abstractmethod
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
-from itertools import pairwise
 
 from index_option_brain.analytics.pricing import ForwardEstimate
+from index_option_brain.analytics.realized import (
+    estimate as estimate_realized,
+)
+from index_option_brain.analytics.realized import (
+    volatility_risk_premium,
+    window_for_tenor,
+)
 from index_option_brain.contracts.enums import BarInterval, MarketSessionState, OptionType
 from index_option_brain.contracts.instruments import (
     Bar,
@@ -186,6 +191,18 @@ class MarketStateBuilder:
             self._days_to_expiry(expiry, quote.timestamp) if expiry is not None else None
         )
 
+        # Realized volatility over a window matched to the option's own
+        # tenor. This used to be a close-to-close standard deviation over the
+        # whole ninety-bar window compared against the ATM implied volatility
+        # of an expiry often five days out — two different horizons, whose
+        # ratio described neither.
+        realized = estimate_realized(
+            daily_bars, window=window_for_tenor(days_to_expiry)
+        )
+        premium = volatility_risk_premium(
+            implied=atm_iv, bars=daily_bars, days_to_expiry=days_to_expiry
+        )
+
         return MarketState(
             timestamp=quote.timestamp,
             session_state=self.session_state(quote.timestamp),
@@ -211,10 +228,21 @@ class MarketStateBuilder:
                 india_vix_previous_close=vix_previous,
                 india_vix_year_high=vix_year_high,
                 india_vix_year_low=vix_year_low,
-                realized_volatility=self._realized_volatility(daily_bars),
                 atm_iv=atm_iv,
                 atm_iv_history=history,
                 days_to_expiry=days_to_expiry,
+                realized_volatility=(
+                    realized.value if realized is not None else None
+                ),
+                realized_estimator=(
+                    str(realized.estimator) if realized is not None else None
+                ),
+                realized_window=(
+                    realized.window if realized is not None else None
+                ),
+                volatility_risk_premium=(
+                    premium.premium if premium is not None else None
+                ),
             ),
         )
 
@@ -346,23 +374,4 @@ class MarketStateBuilder:
         expiry_moment = datetime.combine(expiry, time(15, 30), tzinfo=IST)
         return max((expiry_moment - now).total_seconds() / 86400.0, 0.0)
 
-    def _realized_volatility(self, daily_bars: list[Bar]) -> float | None:
-        """Annualized close-to-close realized volatility, in percent.
 
-        Trading days are used here (252) because realized volatility is
-        measured from observed sessions — unlike the expected-move
-        calculation, which decays over calendar time.
-        """
-        if len(daily_bars) < 3:
-            return None
-        closes = [float(bar.close) for bar in daily_bars]
-        returns = [
-            math.log(current / previous)
-            for previous, current in pairwise(closes)
-            if previous > 0 and current > 0
-        ]
-        if len(returns) < 2:
-            return None
-        average = sum(returns) / len(returns)
-        variance = sum((r - average) ** 2 for r in returns) / (len(returns) - 1)
-        return math.sqrt(variance) * math.sqrt(_TRADING_DAYS_PER_YEAR) * 100.0

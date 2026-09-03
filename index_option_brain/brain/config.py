@@ -89,6 +89,13 @@ class OptionsBrainConfig(_Config):
 
 
 class VolatilityBrainConfig(_Config):
+    vrp_full_scale_points: float = 6.0
+    """Volatility points of premium that score +/-1.
+
+    Roughly the spread between a quiet NIFTY week and a stressed one, so a
+    genuinely rich surface lands near the top of the range without pinning
+    every ordinary day there.
+    """
     low_percentile: float = 0.20
     normal_percentile: float = 0.60
     elevated_percentile: float = 0.85
