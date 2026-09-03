@@ -48,6 +48,7 @@ from __future__ import annotations
 import asyncio
 import csv
 import io
+from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -67,6 +68,10 @@ ARCHIVE_INDEX_NAMES: dict[str, str] = {
     "NIFTY BANK": "nifty bank",
     "FINNIFTY": "nifty financial services",
     "MIDCPNIFTY": "nifty midcap select",
+    # The archive carries India VIX as an index row like any other, which is
+    # what makes the Volatility brain replayable on real history.
+    "INDIAVIX": "india vix",
+    "INDIA VIX": "india vix",
 }
 
 _HEADERS = {
@@ -140,6 +145,31 @@ def parse_archive_csv(body: str, *, index_name: str, day: date) -> Bar | None:
     return None
 
 
+def parse_archive_csv_many(
+    body: str, *, index_names: set[str], day: date
+) -> dict[str, Bar]:
+    """Every requested index's bar out of one whole-market archive file.
+
+    Indices the file does not carry are simply absent from the mapping — the
+    same distinction `parse_archive_csv` makes with None, kept per index so a
+    file that carries NIFTY but not India VIX yields the one it has.
+    """
+    found: dict[str, Bar] = {}
+    for row in csv.DictReader(io.StringIO(body)):
+        name = (row.get("Index Name") or "").strip().lower()
+        if name not in index_names or name in found:
+            continue
+        found[name] = Bar(
+            timestamp=datetime.combine(day, datetime.min.time(), tzinfo=UTC),
+            open=_decimal(row, "Open Index Value", day),
+            high=_decimal(row, "High Index Value", day),
+            low=_decimal(row, "Low Index Value", day),
+            close=_decimal(row, "Closing Index Value", day),
+            volume=_volume(row),
+        )
+    return found
+
+
 class _Unresolved:
     """A day the archive could not be read — neither a bar nor a known holiday."""
 
@@ -185,7 +215,75 @@ class NseArchiveAdapter:
     async def aclose(self) -> None:
         await self._session.aclose()
 
-    async def _fetch_day(self, symbol_name: str, day: date) -> Bar | None | _Unresolved:
+    async def get_many_index_bars(
+        self,
+        symbols: Sequence[str],
+        *,
+        count: int = 60,
+        as_of: date | None = None,
+    ) -> dict[str, list[Bar]]:
+        """Daily bars for several indices, fetching each archive file once.
+
+        One file holds every NSE index, so asking for NIFTY and India VIX
+        separately would double the request count against a host that rate
+        limits — and the two series could then disagree about which sessions
+        existed, which is worse than slow. Returned series are aligned by
+        construction: they come from the same set of files.
+
+        A symbol the archive never carried is absent from the mapping rather
+        than present and empty.
+        """
+        if not symbols or count <= 0:
+            return {}
+        names = {symbol: archive_index_name(symbol) for symbol in symbols}
+        end = as_of or datetime.now(UTC).date()
+        span = min(self._max_lookback_days, int(count * 7 / 5) + 14)
+        candidates = [
+            end - timedelta(days=offset)
+            for offset in range(span)
+            if (end - timedelta(days=offset)).weekday() < 5
+        ]
+
+        results = await asyncio.gather(
+            *(self._fetch_day(set(names.values()), day) for day in candidates)
+        )
+        paired = sorted(zip(candidates, results, strict=True), key=lambda p: p[0])
+
+        unresolved = [d for d, r in paired if isinstance(r, _Unresolved)]
+        out: dict[str, list[Bar]] = {}
+        for symbol, name in names.items():
+            series = [
+                r[name]
+                for _, r in paired
+                if isinstance(r, dict) and name in r
+            ]
+            if series:
+                out[symbol] = series[-count:]
+
+        if not out:
+            raise DataAdapterError(
+                f"NSE archive returned no usable session for {list(symbols)} in "
+                f"the {span} days to {end.isoformat()}"
+            )
+        shortest = min(len(v) for v in out.values())
+        inside = [
+            day
+            for day in unresolved
+            if shortest < count
+            or day >= min(v[0].timestamp.date() for v in out.values())
+        ]
+        if len(inside) > self._max_unresolved:
+            raise DataAdapterError(
+                f"NSE archive left {len(inside)} day(s) unreadable in the "
+                f"{count} sessions to {end.isoformat()}; shortest series "
+                f"resolved {shortest} bars. Refusing to return series with "
+                f"holes — an indicator cannot tell one from a complete series."
+            )
+        return out
+
+    async def _fetch_day(
+        self, symbol_names: str | set[str], day: date
+    ) -> dict[str, Bar] | Bar | None | _Unresolved:
         """One session's bar, `None` for a non-trading day, `_UNRESOLVED` otherwise.
 
         The three outcomes must stay distinct. A 404 is the archive's way of
@@ -221,7 +319,13 @@ class NseArchiveAdapter:
                 if not body or "Index Name" not in body:
                     return _UNRESOLVED
                 try:
-                    return parse_archive_csv(body, index_name=symbol_name, day=day)
+                    if isinstance(symbol_names, str):
+                        return parse_archive_csv(
+                            body, index_name=symbol_names, day=day
+                        )
+                    return parse_archive_csv_many(
+                        body, index_names=symbol_names, day=day
+                    )
                 except DataAdapterError:
                     return _UNRESOLVED
             if attempt + 1 < self._attempts:

@@ -146,3 +146,60 @@ async def test_bars_come_back_oldest_first() -> None:
     adapter = NseArchiveAdapter(_Session(script), backoff=0.0, max_unresolved=0)
     bars = await adapter.get_index_bars("NIFTY", BarInterval.DAY, 5, as_of=date(2026, 9, 3))
     assert [b.timestamp.date() for b in bars] == [date(2026, 9, 1), date(2026, 9, 2)]
+
+
+class TestMultiIndexFetch:
+    """One archive file holds every NSE index, so a caller that wants two
+    series must not fetch each day twice — and must get series that agree
+    about which sessions existed."""
+
+    BODY = (
+        f"{HEADER}\n{ROW}\n"
+        "India VIX,02-09-2026,11.4925,12.1125,10.5475,11.59,0.1,.87,-,-,-,-,-\n"
+    )
+
+    async def test_two_series_come_from_one_pass_over_the_files(self) -> None:
+        url = archive_url(date(2026, 9, 2))
+        session = _Session({url: [_Response(200, self.BODY)]})
+        adapter = NseArchiveAdapter(session, max_unresolved=0)
+
+        series = await adapter.get_many_index_bars(
+            ["NIFTY", "INDIA VIX"], count=3, as_of=date(2026, 9, 3)
+        )
+        assert set(series) == {"NIFTY", "INDIA VIX"}
+        assert series["NIFTY"][0].close == Decimal("23914.45")
+        assert series["INDIA VIX"][0].close == Decimal("11.59")
+        # The day was read once, not once per index.
+        assert session.calls.count(url) == 1
+
+    async def test_the_series_cover_the_same_sessions(self) -> None:
+        """Misaligned series would read one session's volatility into
+        another's decision, and that looks like signal."""
+        script = {
+            archive_url(date(2026, 9, 2)): [_Response(200, self.BODY)],
+            archive_url(date(2026, 9, 1)): [_Response(200, self.BODY)],
+        }
+        adapter = NseArchiveAdapter(_Session(script), max_unresolved=0)
+        series = await adapter.get_many_index_bars(
+            ["NIFTY", "INDIA VIX"], count=5, as_of=date(2026, 9, 3)
+        )
+        assert [b.timestamp for b in series["NIFTY"]] == [
+            b.timestamp for b in series["INDIA VIX"]
+        ]
+
+    async def test_an_index_the_archive_never_carried_is_absent(self) -> None:
+        """Absent, not present and empty — the caller can then tell the
+        difference between 'no history' and 'no such index here'."""
+        body = f"{HEADER}\n{ROW}\n"  # NIFTY only, no VIX row
+        session = _Session({archive_url(date(2026, 9, 2)): [_Response(200, body)]})
+        adapter = NseArchiveAdapter(session, max_unresolved=0)
+
+        series = await adapter.get_many_index_bars(
+            ["NIFTY", "INDIA VIX"], count=3, as_of=date(2026, 9, 3)
+        )
+        assert "NIFTY" in series
+        assert "INDIA VIX" not in series
+
+    async def test_india_vix_resolves_to_the_archives_spelling(self) -> None:
+        assert archive_index_name("INDIA VIX") == "india vix"
+        assert archive_index_name("indiavix") == "india vix"
