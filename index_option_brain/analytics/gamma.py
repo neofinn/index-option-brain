@@ -196,6 +196,29 @@ class GammaAssessment:
         )
 
     @property
+    def carry_ratio(self) -> float | None:
+        """Breakeven divided by the implied move.
+
+        1.000 for a driftless option — that is the identity. Above it when
+        the forward carries a premium, because theta then holds terms the
+        driftless case does not: for a call it gains
+        `-r*K*exp(-rT)*N(d2) + q*S*exp(-qT)*N(d1)`, and a strong forward
+        premium is a large negative `q`.
+
+        Measured live on 4 Sep 2026: NIFTY's forward stood 44 points above
+        spot on a 4.2-day expiry, an implied carry of -9.3%, and the ratio
+        came out 1.232. So the real bar was 151 points against an implied
+        move of 122 — a 24% higher hurdle than the identity alone suggests.
+        Worth reporting rather than assuming away, since it moves in the
+        direction that makes long gamma harder.
+        """
+        implied = self.implied_daily_move
+        base = self.frictionless_breakeven
+        if base is None or implied <= 0:
+            return None
+        return base / implied
+
+    @property
     def breakeven_with_costs(self) -> float | None:
         if self.drag is None:
             return self.frictionless_breakeven
@@ -225,13 +248,21 @@ class GammaAssessment:
         return realized > needed
 
     def describe(self) -> str:
-        parts = [
-            (
+        ratio = self.carry_ratio
+        if ratio is not None and abs(ratio - 1.0) < 0.01:
+            head = (
                 f"Breakeven daily move {self.frictionless_breakeven:.0f} pts, "
                 f"which is the implied move {self.implied_daily_move:.0f} — "
-                "identically, by construction"
+                "identically, as the driftless case requires"
             )
-        ]
+        else:
+            head = (
+                f"Breakeven daily move {self.frictionless_breakeven:.0f} pts "
+                f"against an implied move of {self.implied_daily_move:.0f} "
+                f"({ratio:.2f}x) — the gap is the forward's carry, which "
+                "raises the bar above the driftless identity"
+            )
+        parts = [head]
         if self.drag is not None and self.cost_penalty is not None:
             parts.append(
                 f"hedging {self.drag.hedges_per_day}x/day adds "

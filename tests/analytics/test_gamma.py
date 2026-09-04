@@ -176,6 +176,41 @@ class TestCosts:
         assert assessment.breakeven_with_costs == assessment.frictionless_breakeven
 
 
+class TestCarry:
+    """The identity is the driftless case. A forward premium breaks it, and
+    in the direction that makes long gamma harder."""
+
+    def test_a_driftless_option_sits_exactly_on_the_identity(self) -> None:
+        greeks = atm(7)
+        assessment = GammaAssessment(
+            spot=SPOT, gamma=greeks.gamma, theta=greeks.theta,
+            iv_percent=IV * 100, realized_percent=None,
+        )
+        assert assessment.carry_ratio == pytest.approx(1.0, abs=1e-3)
+        assert "identically" in assessment.describe()
+
+    def test_a_forward_premium_raises_the_bar_above_the_implied_move(self) -> None:
+        """Measured live on 4 Sep 2026: a 44-point forward premium on a
+        4.2-day expiry put the bar at 151 points against an implied 122."""
+        spot, strike, days = 23957.75, 23950.0, 4.20
+        forward = 24001.39
+        carry = 0.065 - math.log(forward / spot) / (days / 365)
+        greeks = price_option(
+            spot=spot, strike=strike, years=days / 365, iv=0.09745,
+            option_type=OptionType.CE, rate=0.065, dividend_yield=carry,
+        )
+        assessment = GammaAssessment(
+            spot=spot, gamma=greeks.gamma, theta=greeks.theta,
+            iv_percent=9.745, realized_percent=None,
+        )
+        assert assessment.carry_ratio == pytest.approx(1.23, abs=0.02)
+        assert assessment.frictionless_breakeven == pytest.approx(151, abs=2)
+
+        text = assessment.describe()
+        assert "identically" not in text
+        assert "carry" in text
+
+
 class TestDescription:
     def test_it_names_the_identity_rather_than_implying_a_calculation(self) -> None:
         greeks = atm(7)
