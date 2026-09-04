@@ -1,0 +1,9 @@
+[Unit]
+Description=Index Brain deploy agent (reconcile from git, report to git)
+After=network-online.target index-brain.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/index-brain
+ExecStart=/usr/local/bin/index-brain-agent
+TimeoutStartSec=600

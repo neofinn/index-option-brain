@@ -1,0 +1,474 @@
+"""The live engine behind the operations console.
+
+One object owns the adapters, measures whether they are actually working, and
+turns their output into the shapes the console renders. It exists so the
+console has nothing to fall back on: there is no sample data path here, and a
+provider that cannot answer produces an explicit unavailable state carrying
+the reason.
+
+Health is measured, never assumed
+---------------------------------
+`probe` calls the endpoints and times them. A capability appears in
+`verified_capabilities` only after a call for it returned data. That is the
+difference between what a `ProviderDescriptor` claims and what is working
+right now, and an operator deciding whether to trade needs the second.
+
+Everything is cached for a few seconds, for coherence rather than politeness:
+the console makes several requests to paint one screen, and if they landed on
+different snapshots the screen would describe a market that never existed.
+"""
+
+from __future__ import annotations
+
+import logging
+import time
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from decimal import Decimal
+from typing import Any, TypeVar
+
+from index_option_brain.brain.pipeline import BrainCycleResult, QuantitativeBrain
+from index_option_brain.capture import CaptureRecorder
+from index_option_brain.contracts.enums import BarInterval, MarketSessionState
+from index_option_brain.contracts.market_state import MarketState
+from index_option_brain.contracts.provider import (
+    Capability,
+    ProviderConnectionState,
+    ProviderHealth,
+)
+from index_option_brain.data.adapters.base import DataAdapterError
+from index_option_brain.data.adapters.nse_archive import NseArchiveAdapter
+from index_option_brain.data.adapters.nse_preopen import NsePreOpenAdapter
+from index_option_brain.data.adapters.nse_public import (
+    NSE_PUBLIC_DESCRIPTOR,
+    NsePublicAdapter,
+    index_config_from_master,
+)
+from index_option_brain.data.bar_aggregator import AggregatingIndexAdapter
+from index_option_brain.data.bar_store import BarStore
+from index_option_brain.data.dhan_instruments import DhanInstrumentMaster
+from index_option_brain.database.repository import SnapshotRepository
+from index_option_brain.state.market_state_builder import (
+    InMemoryIvHistoryStore,
+    MarketStateBuilder,
+)
+
+logger = logging.getLogger(__name__)
+
+DEFAULT_SYMBOLS = ("NIFTY", "BANKNIFTY")
+
+T = TypeVar("T")
+
+
+class FeedUnavailable(RuntimeError):
+    """The feed could not answer. Carries the reason, for display."""
+
+
+@dataclass
+class _Cached:
+    at: float
+    value: Any
+
+
+@dataclass
+class LiveEngine:
+    """Live market data and analysis for the console.
+
+    Deliberately holds no positions, account or orders: nothing here can place
+    a trade, and the console's execution panels stay empty until a broker
+    adapter exists. An account figure invented for display would be the most
+    dangerous fake number in the system.
+    """
+
+    cache_seconds: float = 5.0
+    intraday_interval: BarInterval = BarInterval.MINUTE_5
+    bar_store: BarStore | None = None
+    """Makes observed bars survive a restart. None keeps them in memory only."""
+    _cache: dict[str, _Cached] = field(default_factory=dict)
+    _nse: NsePublicAdapter | None = None
+    _index: AggregatingIndexAdapter | None = None
+    _builder: MarketStateBuilder | None = None
+    _brain: QuantitativeBrain = field(default_factory=QuantitativeBrain)
+    _iv_history: InMemoryIvHistoryStore = field(default_factory=InMemoryIvHistoryStore)
+    _health: dict[str, ProviderHealth] = field(default_factory=dict)
+    _master: DhanInstrumentMaster | None = None
+    daily_history_bars: int = 60
+    """Sessions to seed from the NSE archive on start.
+
+    The Index brain's confidence is scaled by `len(daily) / min_daily_bars`,
+    so with no daily history it reports 0.00 and the Regime Engine's coverage
+    gate — correctly — refuses to classify anything. 60 clears the 30-bar
+    floor with room for the holidays inside any given quarter.
+    """
+    capture: CaptureRecorder | None = None
+    """Records what is observed, so uptime becomes backtest corpus.
+
+    None disables capture entirely. Nothing here reads back into a decision,
+    so a capture failure costs history and never a trade — see
+    `capture/recorder.py`.
+    """
+    archive: NseArchiveAdapter | None = None
+    """History source for the daily seed.
+
+    Injectable so a test — or a deployment behind a proxy that cannot reach
+    `archives.nseindia.com` — can supply its own transport. Left as None, one
+    is built on first use against the live archive. Set
+    `daily_history_bars=0` to disable seeding entirely.
+    """
+    _seeded: set[str] = field(default_factory=set)
+    _owns_archive: bool = False
+
+    # ------------------------------------------------------------ lifecycle
+
+    async def load_instruments(self) -> DhanInstrumentMaster:
+        """Fetch contract specifications from the exchange's own record.
+
+        Called before the adapters are built, so lot size, tick size and
+        strike step are read rather than assumed. Dhan publishes this without
+        authentication, which is what makes it usable before any
+        subscription — and it is the difference between a verified contract
+        size and a constant with a warning comment on it.
+        """
+        if self._master is None:
+            self._master = await DhanInstrumentMaster.load()
+        return self._master
+
+    async def ensure_ready(self) -> None:
+        """Load contract specifications, then build the adapters around them.
+
+        A failure here is not fatal: the adapters fall back to the snapshot in
+        DEFAULT_INDEX_CONFIG, and `instrument_source` reports which was used
+        so the console can say so. Refusing to start would make a transient
+        CDN outage an availability outage.
+        """
+        try:
+            master = await self.load_instruments()
+        except DataAdapterError:
+            self._ensure()
+            return
+        config = index_config_from_master(master)
+        if config:
+            self._nse = NsePublicAdapter(index_config=config)
+            self._index = AggregatingIndexAdapter(
+                self._nse,
+                intervals=(self.intraday_interval, BarInterval.DAY),
+                store=self.bar_store,
+            )
+            self._builder = MarketStateBuilder(
+                self._index,
+                NsePreOpenAdapter(self._nse),
+                self._nse,
+                self._nse,
+                self._iv_history,
+                intraday_interval=self.intraday_interval,
+            )
+        else:
+            self._ensure()
+
+    @property
+    def instrument_source(self) -> str:
+        """Where the contract specifications in use came from.
+
+        Surfaced because a stale lot size mis-sizes every order, and an
+        operator needs to be able to tell a verified table from a fallback.
+        """
+        if self._master is not None:
+            return "dhan_instrument_master"
+        return "bundled_snapshot"
+
+    def _ensure(self) -> tuple[NsePublicAdapter, AggregatingIndexAdapter, MarketStateBuilder]:
+        if self._nse is None or self._index is None or self._builder is None:
+            self._nse = NsePublicAdapter()
+            self._index = AggregatingIndexAdapter(
+                self._nse,
+                intervals=(self.intraday_interval, BarInterval.DAY),
+                store=self.bar_store,
+            )
+            self._builder = MarketStateBuilder(
+                self._index,
+                # Breadth comes from the pre-open auction board, which is the
+                # only constituent feed NSE serves this client
+                # (`/api/equity-stockIndices` is 404). It goes stale after the
+                # open by design and the adapter refuses it then, so the
+                # Constituent brain reports nothing rather than reading a
+                # morning snapshot as the afternoon market.
+                NsePreOpenAdapter(self._nse),
+                self._nse,
+                self._nse,
+                self._iv_history,
+                intraday_interval=self.intraday_interval,
+            )
+        return self._nse, self._index, self._builder
+
+    def persist_bars(self) -> int:
+        """Snapshot observed bars. Returns the number of series written."""
+        if self._index is None:
+            return 0
+        return self._index.persist()
+
+    async def aclose(self) -> None:
+        # Snapshot before tearing down, so a clean shutdown keeps the session's
+        # bars rather than discarding them.
+        try:
+            self.persist_bars()
+        except OSError:
+            # A failure to persist must not prevent a clean shutdown.
+            pass
+        if self._nse is not None:
+            await self._nse.aclose()
+        self._nse = None
+        self._index = None
+        self._builder = None
+        if self.archive is not None and self._owns_archive:
+            # Only close what this engine opened; an injected adapter belongs
+            # to its caller and may outlive one engine.
+            await self.archive.aclose()
+            self.archive = None
+            self._owns_archive = False
+        self._seeded.clear()
+        self._cache.clear()
+
+    # --------------------------------------------------------------- cache
+
+    def _fresh(self, key: str, kind: type[T]) -> T | None:
+        entry = self._cache.get(key)
+        if entry is None or time.monotonic() - entry.at > self.cache_seconds:
+            return None
+        return entry.value if isinstance(entry.value, kind) else None
+
+    def _store(self, key: str, value: T) -> T:
+        self._cache[key] = _Cached(at=time.monotonic(), value=value)
+        return value
+
+    # -------------------------------------------------------------- health
+
+    def health(self, provider_id: str) -> ProviderHealth:
+        """The last measured health, or an explicitly unmeasured one.
+
+        NOT_CONFIGURED rather than a zeroed CONNECTED: a console reporting 0 ms
+        for a provider it has never called would be reporting a measurement it
+        does not have.
+        """
+        return self._health.get(provider_id, ProviderHealth(provider_id=provider_id))
+
+    def all_health(self) -> dict[str, ProviderHealth]:
+        return dict(self._health)
+
+    async def probe(self, symbol: str = "NIFTY") -> ProviderHealth:
+        """Call the live endpoints and record what actually worked."""
+        cached = self._fresh(f"probe:{symbol}", ProviderHealth)
+        if cached is not None:
+            return cached
+
+        nse, _, _ = self._ensure()
+        verified: set[Capability] = set()
+        errors: list[str] = []
+        started = time.perf_counter()
+
+        try:
+            await nse.get_index_quote(symbol)
+            verified.add(Capability.INDEX_QUOTE)
+        except DataAdapterError as exc:
+            errors.append(f"index quote: {exc}")
+
+        try:
+            await nse.get_india_vix()
+            verified.add(Capability.INDIA_VIX)
+        except DataAdapterError as exc:
+            errors.append(f"India VIX: {exc}")
+
+        try:
+            expiries = await nse.get_available_expiries(symbol)
+            verified.add(Capability.EXPIRY_LIST)
+        except DataAdapterError as exc:
+            errors.append(f"expiries: {exc}")
+            expiries = []
+
+        if expiries:
+            try:
+                await nse.get_option_chain(symbol, expiries[0])
+                verified.add(Capability.OPTION_CHAIN)
+            except DataAdapterError as exc:
+                errors.append(f"chain: {exc}")
+
+        latency_ms = (time.perf_counter() - started) * 1000.0
+        declared = NSE_PUBLIC_DESCRIPTOR.capabilities
+
+        if not verified:
+            state = ProviderConnectionState.FAILED
+        elif verified >= set(declared):
+            state = ProviderConnectionState.CONNECTED
+        else:
+            # Reachable but not serving everything it declared. This is a real
+            # and useful state, not a euphemism for broken.
+            state = ProviderConnectionState.DEGRADED
+
+        now = datetime.now(UTC)
+        health = ProviderHealth(
+            provider_id=NSE_PUBLIC_DESCRIPTOR.provider_id,
+            state=state,
+            checked_at=now.isoformat(),
+            latency_ms=round(latency_ms, 1),
+            last_success_at=now.isoformat() if verified else None,
+            last_error="; ".join(errors) or None,
+            verified_capabilities=frozenset(verified),
+        )
+        self._health[health.provider_id] = health
+        return self._store(f"probe:{symbol}", health)
+
+    # -------------------------------------------------------- market state
+
+    async def seed_daily_history(self, symbol: str) -> int:
+        """Seed the aggregator's daily series from NSE's published archive.
+
+        Returns the number of bars seeded, or 0 when the archive could not
+        supply a clean series. Zero is not a failure to hide: the brains
+        degrade honestly on a short series, and the Regime Engine's coverage
+        gate reports the shortfall in its own evidence. What must not happen
+        is a *partial* seed presented as history, which is why the adapter
+        raises on holes rather than returning what it managed to fetch.
+
+        Idempotent per symbol: seeding twice would double-count nothing, but
+        the archive round trip is ~60 requests and not worth repeating.
+        """
+        key = symbol.upper()
+        if key in self._seeded or self.daily_history_bars <= 0:
+            return 0
+        _, index, _ = self._ensure()
+        if self.archive is None:
+            self.archive = NseArchiveAdapter()
+            self._owns_archive = True
+        try:
+            bars = await self.archive.get_index_bars(key, BarInterval.DAY, self.daily_history_bars)
+        except DataAdapterError:
+            # Mark it attempted anyway: retrying 60 requests on every cycle
+            # would turn one bad archive into a self-inflicted rate limit.
+            self._seeded.add(key)
+            return 0
+        index.seed(key, BarInterval.DAY, bars)
+        self._seeded.add(key)
+        return len(bars)
+
+    async def market_state(self, symbol: str) -> MarketState:
+        cached = self._fresh(f"state:{symbol}", MarketState)
+        if cached is not None:
+            return cached
+        await self.seed_daily_history(symbol)
+        _, _, builder = self._ensure()
+        try:
+            state = await builder.build(symbol)
+        except DataAdapterError as exc:
+            raise FeedUnavailable(str(exc)) from exc
+        return self._store(f"state:{symbol}", state)
+
+    async def analysis(self, symbol: str) -> BrainCycleResult:
+        """Run the brain on the live state.
+
+        No account or portfolio is passed, so the Risk Engine does not run and
+        nothing here can present itself as authorized. That is correct until a
+        broker is connected: authorizing a size against an account the system
+        cannot see would be the worst possible invention.
+        """
+        cached = self._fresh(f"analysis:{symbol}", BrainCycleResult)
+        if cached is not None:
+            return cached
+        state = await self.market_state(symbol)
+        result = self._brain.run(state)
+        if self.capture is not None:
+            # Deliberately after the brain has run and before the result is
+            # returned: the capture must never sit between the feed and a
+            # decision, and it must never be able to fail one.
+            await self.capture.record(result)
+        return self._store(f"analysis:{symbol}", result)
+
+    async def capture_status(self, symbol: str) -> dict[str, Any]:
+        """What the capture has recorded, and whether it is working.
+
+        Reported rather than assumed: a capture that silently stopped looks
+        exactly like one with nothing to do, and one of those costs a year
+        of corpus that cannot be bought back.
+        """
+        if self.capture is None:
+            return {
+                "enabled": False,
+                "reason": "No database configured, so nothing is being recorded",
+            }
+        return {
+            "enabled": True,
+            "stats": self.capture.stats.as_dict(),
+            "coverage": await self.capture.coverage(symbol),
+        }
+
+    async def recent_cycles(
+        self, symbol: str, *, limit: int = 60
+    ) -> list[dict[str, Any]]:
+        """Recorded cycles for the console's history panel, newest first.
+
+        Returns an empty list when persistence is unreachable — the caller
+        has already reported whether capture is enabled, so an empty list
+        here cannot be confused with "capture is off".
+        """
+        if self.capture is None or not await self.capture.ensure_ready():
+            return []
+        try:
+            async with self.capture.database.session() as session:
+                rows = await SnapshotRepository(session).recent_cycles(
+                    symbol, limit=limit
+                )
+                return [
+                    {
+                        "observed_at": row.observed_at.isoformat(),
+                        "regime": row.regime,
+                        "regime_confidence": row.regime_confidence,
+                        "signal_direction": row.signal_direction,
+                        "signal_score": row.signal_score,
+                        "strategy": row.strategy,
+                        "is_actionable": row.is_actionable,
+                        "basis_score": row.basis_score,
+                        "vrp_score": row.vrp_score,
+                        "index_confidence": row.index_confidence,
+                    }
+                    for row in rows
+                ]
+        except Exception:
+            logger.exception("History unavailable")
+            return []
+
+    def bar_coverage(self, symbol: str) -> dict[str, Any]:
+        """How much history has been observed, and whether it has holes.
+
+        Surfaced because a short bar series and a gappy one look identical in
+        a chart but mean different things to an indicator.
+        """
+        _, index, _ = self._ensure()
+        report: dict[str, Any] = {}
+        for interval in (self.intraday_interval, BarInterval.DAY):
+            stats = index.stats(symbol, interval)
+            report[str(interval)] = {
+                "bars": len(index.aggregator(symbol, interval).completed),
+                "observations": stats.observations,
+                "missing_buckets": stats.missing_buckets,
+                "discarded_partial": stats.bars_discarded_partial,
+                "has_gaps": stats.has_gaps,
+                "first_observation": (
+                    stats.first_observation.isoformat() if stats.first_observation else None
+                ),
+                "seeded": stats.seeded_bars,
+            }
+        return report
+
+
+def money(value: Decimal | float | None) -> float | None:
+    """Convert for transport, or None. There is no zero default: a missing
+    figure must not arrive at the console looking like a measured zero."""
+    return None if value is None else float(value)
+
+
+def session_label(state: MarketSessionState) -> str:
+    return {
+        MarketSessionState.PRE_MARKET: "Pre-market",
+        MarketSessionState.OPENING: "Opening auction",
+        MarketSessionState.ACTIVE: "Active",
+        MarketSessionState.CLOSING: "Closing",
+        MarketSessionState.CLOSED: "Closed",
+    }[state]
