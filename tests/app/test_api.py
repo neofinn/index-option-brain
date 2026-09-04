@@ -503,3 +503,48 @@ class TestExposureSurface:
         body = client.get("/api/analysis/NIFTY").json()
         assert body["exposure"]["available"] is False
         assert "No broker connected" in body["exposure"]["reason"]
+
+
+class TestBriefEndpoint:
+    """Plain text for a chat channel, and read-only like every other route.
+
+    The read-only property is what lets an assistant with shell access run
+    on the same box: it can learn what the system thinks and cannot change
+    what it does.
+    """
+
+    def test_it_returns_text_not_json(self, client: TestClient) -> None:
+        response = client.get("/api/brief/NIFTY")
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/plain")
+
+    def test_it_always_says_nothing_is_authorized(self, client: TestClient) -> None:
+        """An assistant relaying "NIFTY looks bullish" without this would
+        read as a position the system holds."""
+        assert "Nothing is authorized" in client.get("/api/brief/NIFTY").text
+
+    def test_it_carries_what_could_not_be_measured(self, client: TestClient) -> None:
+        """A summary that drops the unknowns makes a blind cycle sound like
+        a confident one."""
+        body = client.get("/api/brief/NIFTY").text
+        assert "Unmeasured:" in body or "no live data" in body
+
+    def test_an_unavailable_feed_says_so_in_one_line(
+        self, blocked_client: TestClient
+    ) -> None:
+        assert blocked_client.get("/api/brief/NIFTY").text.startswith(
+            "NIFTY: no live data"
+        )
+
+    def test_every_route_is_read_only(self) -> None:
+        """The boundary Clawdbot sits behind. If a write route is ever added
+        it belongs on a different process the assistant cannot reach."""
+        app = create_app(engine_on(nse_session()), run_poller=False)
+        methods = {
+            method
+            for route in app.routes
+            for method in getattr(route, "methods", set())
+        }
+        assert methods <= {"GET", "HEAD", "OPTIONS"}, (
+            f"A non-read method is exposed: {methods}"
+        )

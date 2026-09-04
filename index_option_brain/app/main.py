@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 
 from index_option_brain.agent import NarrativeProvider
 from index_option_brain.app.live import FeedUnavailable, LiveEngine, session_label
@@ -607,6 +607,84 @@ def create_app(
                 else None
             ),
         }
+
+    @app.get("/api/brief/{symbol}", response_class=PlainTextResponse)
+    async def brief(symbol: str) -> str:
+        """One paragraph of plain text: what the engine sees and what it decided.
+
+        Plain text rather than JSON because the consumer is a chat channel —
+        a phone relaying two sentences beats one relaying a payload. The
+        content comes from `NarrativeProvider`, which is deterministic and
+        runs with LLM_ENABLED=false, so this endpoint stays truthful with no
+        model in the loop.
+
+        Deliberately read-only, like every other route here. Anything that
+        can reach this endpoint can learn what the system thinks and cannot
+        change what it does — which is the property that lets an assistant
+        with shell access sit on the same box without being able to trade.
+        """
+        symbol = symbol.upper()
+        try:
+            result = await live.analysis(symbol)
+        except FeedUnavailable as exc:
+            return f"{symbol}: no live data — {exc}"
+
+        state = result.state
+        quote = state.index_state.quote
+        volatility = state.volatility_state
+        narrative = NarrativeProvider().describe(
+            analysis=state.analysis,
+            regime=result.regime,
+            signal=result.signal,
+            strategy=result.selected_strategy,
+            candidate=result.best_candidate,
+            is_authorized=result.is_authorized,
+        )
+
+        lines = [
+            (
+                f"{symbol} {quote.ltp} ({quote.change_pct:+.2f}%)  "
+                f"H {quote.high} L {quote.low}"
+            ),
+            narrative.summary,
+        ]
+        if volatility.atm_iv is not None:
+            iv_line = f"ATM IV {volatility.atm_iv:.2f}%"
+            if volatility.realized_volatility is not None:
+                iv_line += (
+                    f" vs {volatility.realized_window}d realized "
+                    f"{volatility.realized_volatility:.2f}%"
+                )
+            if volatility.volatility_risk_premium is not None:
+                premium = volatility.volatility_risk_premium
+                iv_line += (
+                    f", premium {premium:+.2f} "
+                    f"({'rich' if premium > 0 else 'cheap'})"
+                )
+            lines.append(iv_line)
+        if narrative.supporting_points:
+            lines.append("For: " + "; ".join(narrative.supporting_points[:2]))
+        if narrative.contradicting_points:
+            lines.append("Against: " + "; ".join(narrative.contradicting_points[:2]))
+        if narrative.unknowns:
+            # What is unmeasured matters as much as what is: an assistant
+            # relaying only the conclusion would make a blind cycle sound
+            # like a confident one.
+            lines.append("Unmeasured: " + "; ".join(narrative.unknowns[:2]))
+        if not result.is_authorized:
+            # Said every time, not only when something was ranked. An
+            # assistant relaying "NIFTY is bullish" without this would read
+            # as a position the system holds.
+            lines.append(
+                "Nothing is authorized"
+                + (
+                    ": no broker is connected, so the Risk Engine has no "
+                    "account to size against."
+                    if result.risk_decision is None
+                    else " — risk declined."
+                )
+            )
+        return "\n".join(lines)
 
     @app.get("/api/history/{symbol}")
     async def history(symbol: str, limit: int = 60) -> dict[str, Any]:
