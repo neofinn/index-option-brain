@@ -54,7 +54,9 @@ die()  { printf '\033[1;31m x\033[0m %s\n' "$*" >&2; exit 1; }
 log "Base packages"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -y -qq ca-certificates curl gnupg git jq ufw >/dev/null
+# sudo is used to verify the clawdbot boundary and is not guaranteed on a
+# minimal template; python3 is needed by the deploy agent on the host.
+apt-get install -y -qq ca-certificates curl gnupg git jq ufw sudo python3 >/dev/null
 
 log "Docker"
 if ! command -v docker >/dev/null 2>&1; then

@@ -31,12 +31,40 @@ STATE_FILE="${STATE_FILE:-deploy/desired_state.json}"
 HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:8000/ready}"
 APPLIED_FILE="${APPLIED_FILE:-/var/lib/index-brain/applied-revision}"
 SERVICE="${SERVICE:-index-brain.service}"
-PY="${PY:-docker compose exec -T app python}"
+# Two interpreters, for two different jobs.
+#
+# HOST_PY runs small inline scripts needing only the standard library.
+# Ubuntu ships `python3` and, since 20.04, no `python` at all — an earlier
+# version of this script called bare `python` and would have died with
+# "command not found" on 22.04 before doing anything useful.
+#
+# BRAIN_PY runs the deploy CLI, which needs the package importable. That
+# lives in the app container (Python 3.12); the host's is 3.10 with nothing
+# installed. Detected rather than assumed, because the container may
+# legitimately be down when the agent runs — and then the agent must report
+# that rather than crash.
+HOST_PY="${HOST_PY:-python3}"
+
+detect_brain_py() {
+    if docker compose exec -T app python -c 'import index_option_brain' >/dev/null 2>&1; then
+        echo "docker compose exec -T app python"; return 0
+    fi
+    if "$HOST_PY" -c 'import index_option_brain' >/dev/null 2>&1; then
+        echo "$HOST_PY"; return 0
+    fi
+    return 1
+}
 
 log() { printf '%s agent: %s\n' "$(date -Is)" "$*"; }
 
 cd "$APP_DIR"
 mkdir -p "$(dirname "$APPLIED_FILE")"
+
+if BRAIN_PY="$(detect_brain_py)"; then
+    read -r -a BRAIN_PY_ARGV <<< "$BRAIN_PY"
+else
+    BRAIN_PY_ARGV=()
+fi
 APPLIED="$(cat "$APPLIED_FILE" 2>/dev/null || true)"
 CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 ERRORS=()
@@ -56,13 +84,16 @@ if [[ -s /tmp/desired_state.json ]]; then
   # and sets REJECTED, and we deliberately keep running so the rejection
   # itself gets reported — a box that silently ignores bad intent looks
   # identical to one that never received it.
-  if PLAN="$(python -m index_option_brain.deploy.cli plan \
+  if (( ${#BRAIN_PY_ARGV[@]} == 0 )); then
+    ERRORS+=("no interpreter can import index_option_brain; intent not applied")
+    log "cannot reach the app's Python — skipping reconcile, still reporting"
+  elif PLAN="$("${BRAIN_PY_ARGV[@]}" -m index_option_brain.deploy.cli plan \
         --file /tmp/desired_state.json \
         --current-branch "$CURRENT_BRANCH" \
         --applied-revision "$APPLIED" 2>/dev/null)"; then
     eval "$PLAN"
   else
-    eval "$(python -m index_option_brain.deploy.cli plan \
+    eval "$("${BRAIN_PY_ARGV[@]}" -m index_option_brain.deploy.cli plan \
         --file /tmp/desired_state.json \
         --current-branch "$CURRENT_BRANCH" \
         --applied-revision "$APPLIED" 2>/dev/null || true)"
@@ -83,7 +114,7 @@ if [[ -z "${REJECTED:-}" && -n "$REVISION" ]]; then
   # Config lands in an env file the unit reads, never in .env — that file
   # holds credentials and nothing pushed from a repository may write to it.
   if [[ "$ENV_UPDATES" != "{}" ]]; then
-    python - "$ENV_UPDATES" <<'PYEOF'
+    "$HOST_PY" - "$ENV_UPDATES" <<'PYEOF'
 import json, pathlib, sys
 updates = json.loads(sys.argv[1])
 path = pathlib.Path("/etc/index-brain/managed.env")
@@ -123,7 +154,7 @@ SERVICE_ACTIVE=0
 systemctl is-active --quiet "$SERVICE" && SERVICE_ACTIVE=1 || ERRORS+=("$SERVICE not active")
 
 DETAIL="$(curl -fsS --max-time 10 "http://127.0.0.1:8000/api/market/NIFTY" 2>/dev/null \
-  | python -c 'import json,sys
+  | "$HOST_PY" -c 'import json,sys
 try:
     d=json.load(sys.stdin)
     print(json.dumps({"capture":d.get("capture",{}).get("coverage"),
@@ -138,7 +169,31 @@ STATUS_ARGS=(--out /tmp/deploy-status.json --revision "${REVISION:-none}"
 (( HEALTHY )) && STATUS_ARGS+=(--healthy)
 (( SERVICE_ACTIVE )) && STATUS_ARGS+=(--service-active)
 for e in ${ERRORS[@]+"${ERRORS[@]}"}; do STATUS_ARGS+=(--error "$e"); done
-python -m index_option_brain.deploy.cli status "${STATUS_ARGS[@]}" >/dev/null
+if (( ${#BRAIN_PY_ARGV[@]} )); then
+  "${BRAIN_PY_ARGV[@]}" -m index_option_brain.deploy.cli status "${STATUS_ARGS[@]}" >/dev/null
+else
+  # The CLI being unreachable is itself the most important thing to report,
+  # so write the minimum by hand rather than saying nothing at all.
+  "$HOST_PY" - "$CURRENT_BRANCH" "$HEALTHY" "$SERVICE_ACTIVE" > /tmp/deploy-status.json <<'STATUSPY'
+import json, platform, subprocess, sys
+from datetime import UTC, datetime
+branch, healthy, active = sys.argv[1], sys.argv[2] == "1", sys.argv[3] == "1"
+commit = subprocess.run(
+    ["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True
+).stdout.strip()
+print(json.dumps({
+    "hostname": platform.node(),
+    "reported_at": datetime.now(UTC).isoformat(),
+    "applied_revision": "none",
+    "commit": commit,
+    "branch": branch,
+    "healthy": healthy,
+    "service_active": active,
+    "detail": {},
+    "errors": ["index_option_brain not importable by any interpreter"],
+}, indent=1, sort_keys=True))
+STATUSPY
+fi
 
 # Publish. An orphan branch holding one file per host: it shares no history
 # with the code, so a status push can never touch a source branch and a
