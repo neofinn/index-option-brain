@@ -51,6 +51,21 @@ die()  { printf '\033[1;31m x\033[0m %s\n' "$*" >&2; exit 1; }
 . /etc/os-release 2>/dev/null || true
 [ "${ID:-}" = "ubuntu" ] || warn "Tested on Ubuntu; ${ID:-unknown} may differ."
 
+log "Connectivity"
+# Checked up front and by name, because a resolver that answers for one host
+# and not another produces a failure hundreds of lines later that looks like
+# the thing it interrupted. Observed on a Proxmox box: github resolved,
+# tailscale.com did not.
+DNS_FAILED=()
+for host in raw.githubusercontent.com github.com download.docker.com tailscale.com; do
+  getent hosts "$host" >/dev/null 2>&1 || DNS_FAILED+=("$host")
+done
+if (( ${#DNS_FAILED[@]} )); then
+  warn "cannot resolve: ${DNS_FAILED[*]}"
+  warn "current resolver(s): $(awk '/^nameserver/{printf "%s ", $2}' /etc/resolv.conf 2>/dev/null)"
+  warn "if this persists:  echo 'nameserver 1.1.1.1' >> /etc/resolv.conf"
+fi
+
 log "Base packages"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
@@ -74,11 +89,20 @@ fi
 systemctl enable --now docker >/dev/null 2>&1 || true
 docker --version
 
-log "Tailscale"
-if ! command -v tailscale >/dev/null 2>&1; then
-  curl -fsSL https://tailscale.com/install.sh | sh >/dev/null
+# `docker --version` proves a binary exists and nothing about whether it can
+# run a container. That distinction matters here: this script is expected to
+# land on Proxmox LXC containers, where the kernel logs "overlayfs: idmapped
+# layers are currently not supported" and the storage driver may not work at
+# all. Better to fail on a 4 kB image than on our build.
+if ! docker run --rm hello-world >/dev/null 2>&1; then
+  warn "Docker cannot run a container. Storage driver: $(docker info -f '{{.Driver}}' 2>/dev/null || echo unknown)"
+  warn "On an LXC container this usually needs fuse-overlayfs, or a VM instead:"
+  warn "  apt-get install -y fuse-overlayfs"
+  warn "  printf '{\"storage-driver\":\"fuse-overlayfs\"}' > /etc/docker/daemon.json"
+  warn "  systemctl restart docker"
+  die "Refusing to continue: the app runs in a container and cannot start here."
 fi
-systemctl enable --now tailscaled >/dev/null 2>&1 || true
+echo "  container runtime OK"
 
 log "Application user and checkout"
 id -u "$APP_USER" >/dev/null 2>&1 || useradd --system --create-home --shell /usr/sbin/nologin "$APP_USER"
@@ -231,11 +255,26 @@ BOTENVEOF
   echo "  install Clawdbot itself into $BOT_DIR as $BOT_USER, per its own docs"
 fi
 
-log "Tailscale"
-if tailscale status >/dev/null 2>&1; then
+# Tailscale last, and never fatal. It is how you *reach* the console, not
+# how the console runs — an earlier version installed it before the app and
+# aborted the whole run when tailscale.com would not resolve, leaving a box
+# with no application on it at all. Remote access is worth retrying; it is
+# not worth the deployment.
+log "Tailscale (optional)"
+if ! command -v tailscale >/dev/null 2>&1; then
+  if curl -fsSL --max-time 60 https://tailscale.com/install.sh -o /tmp/ts.sh 2>/dev/null; then
+    sh /tmp/ts.sh >/dev/null 2>&1 || warn "Tailscale installer failed; the app is unaffected."
+  else
+    warn "Could not fetch the Tailscale installer (DNS?). The app is running regardless."
+    warn "Retry later with: curl -fsSL https://tailscale.com/install.sh | sh"
+  fi
+fi
+systemctl enable --now tailscaled >/dev/null 2>&1 || true
+
+if command -v tailscale >/dev/null 2>&1 && tailscale status >/dev/null 2>&1; then
   tailscale serve --bg --https=443 "http://127.0.0.1:$PORT" >/dev/null 2>&1 || true
   echo "  console: https://$(tailscale status --json | jq -r '.Self.DNSName' | sed 's/\.$//')"
-else
+elif command -v tailscale >/dev/null 2>&1; then
   cat <<'TSEOF'
   Not connected yet. Run:
 
@@ -245,6 +284,9 @@ else
 
       tailscale serve --bg --https=443 http://127.0.0.1:8000
 TSEOF
+else
+  warn "Tailscale is not installed. The console is on 127.0.0.1:$PORT only."
+  warn "Check it locally with: curl -s http://127.0.0.1:$PORT/api/brief/NIFTY"
 fi
 
 log "Done"
