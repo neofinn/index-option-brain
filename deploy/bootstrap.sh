@@ -39,6 +39,7 @@ APP_DIR="${APP_DIR:-/opt/index-brain}"
 APP_USER="${APP_USER:-indexbrain}"
 BOT_USER="${BOT_USER:-clawdbot}"
 BOT_DIR="${BOT_DIR:-/opt/clawdbot}"
+STATUS_BRANCH="${STATUS_BRANCH:-deploy-status}"
 PORT="${PORT:-8000}"
 INSTALL_CLAWDBOT="${INSTALL_CLAWDBOT:-ask}"
 
@@ -119,6 +120,8 @@ Type=simple
 User=$APP_USER
 WorkingDirectory=$APP_DIR
 EnvironmentFile=$APP_DIR/.env
+# Managed by the deploy agent. '-' so a missing file is not a boot failure.
+EnvironmentFile=-/etc/index-brain/managed.env
 ExecStart=/usr/bin/docker compose up --build
 ExecStop=/usr/bin/docker compose down
 Restart=always
@@ -128,15 +131,26 @@ RestartSec=10
 WantedBy=multi-user.target
 UNITEOF
 
-for unit in index-brain-update.service index-brain-update.timer; do
+for unit in index-brain-update.service index-brain-update.timer \
+            index-brain-agent.service index-brain-agent.timer; do
   [ -f "$APP_DIR/deploy/$unit" ] && install -m 0644 "$APP_DIR/deploy/$unit" "/etc/systemd/system/$unit"
 done
 [ -f "$APP_DIR/deploy/self-update.sh" ] && install -m 0755 "$APP_DIR/deploy/self-update.sh" /usr/local/bin/index-brain-update
+[ -f "$APP_DIR/deploy/agent.sh" ] && install -m 0755 "$APP_DIR/deploy/agent.sh" /usr/local/bin/index-brain-agent
+
+# The agent reads config from a file it manages and the unit loads. It is
+# separate from .env on purpose: .env holds credentials and nothing pushed
+# from a repository may write to it.
+mkdir -p /etc/index-brain
+touch /etc/index-brain/managed.env
+chmod 644 /etc/index-brain/managed.env
 
 systemctl daemon-reload
 systemctl enable --now index-brain.service
 systemctl enable --now index-brain-update.timer 2>/dev/null || \
   warn "Update timer not installed; deploys will need a manual restart."
+systemctl enable --now index-brain-agent.timer 2>/dev/null || \
+  warn "Agent timer not installed; the box will not report its status back."
 
 log "Firewall"
 # Loopback and tailnet only. The console is never on the public internet —
@@ -238,6 +252,9 @@ cat <<SUMMARYEOF
   logs       journalctl -u index-brain -f
   updates    pull-based, health-checked, auto-rollback
   keys       $APP_DIR/.env  (0600, $APP_USER only)
+  config     /etc/index-brain/managed.env  (agent-managed, no secrets)
+  agent      systemctl status index-brain-agent.timer
+  status     pushed to the '$STATUS_BRANCH' branch every 5 minutes
 
   The engine is analysis-only until a broker is configured AND its response
   mapping is verified. It will not place an order in this state.
