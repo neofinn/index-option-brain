@@ -44,6 +44,7 @@ from index_option_brain.data.providers import (
     verified_providers,
 )
 from index_option_brain.database.engine import Database
+from index_option_brain.integrations.tradingview import chartfeed
 from index_option_brain.integrations.tradingview.sink import pending_alerts
 
 
@@ -711,6 +712,27 @@ def create_app(
             "count": len(cycles),
             "cycles": cycles,
         }
+
+    @app.get("/api/chartfeed/{symbol}", response_class=PlainTextResponse)
+    async def chart_feed(symbol: str) -> str:
+        """One line to paste into the Pine indicator's *Engine feed* input.
+
+        The chart reproduces the Index brain exactly because that brain is
+        OHLC arithmetic. Breadth, open interest, implied volatility, the
+        parity forward and the volatility risk premium are not — Pine
+        cannot fetch a chain — so they are carried across as text instead
+        of being recomputed or, worse, approximated.
+
+        The line is timestamped and the indicator renders its age. A feed
+        nobody has refreshed is the failure this integration invites, and
+        the only defence is that a stale one looks stale.
+        """
+        symbol = symbol.upper()
+        try:
+            result = await live.analysis(symbol)
+        except FeedUnavailable as exc:
+            return f"# {symbol}: no live data — {exc}"
+        return chartfeed.build(result)
 
     @app.get("/api/tradingview")
     async def tradingview_alerts(limit: int = 25) -> dict[str, Any]:

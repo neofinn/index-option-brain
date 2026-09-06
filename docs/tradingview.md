@@ -165,6 +165,62 @@ note. The engine re-derives the score from its own data on waking, so the
 label decides only whether the pipeline is worth waking, never what it
 finds.
 
+## The engine feed: transporting what Pine cannot compute
+
+The chart recomputes the Index brain. It cannot compute breadth, open
+interest, implied volatility, the parity forward or the VRP — so those are
+**carried across as text** instead.
+
+`GET /api/chartfeed/NIFTY` returns one pasteable line:
+
+```
+v1|2026-09-06T04:15:00Z|NIFTY|spot=24366.88|regime=TREND_UP|rgc=0.29|dir=NEUTRAL
+|sig=0.00|sup=24356.83,24303.93|res=24500.00,24516.49|adv=1|dec=9|brd=-0.87
+|cov=1.00|mp=24400.00|cw=24500.00,24400.00|pw=24000.00,24250.00|pcr=0.99
+|iv=14.04|rv=13.86|vrp=0.18|ivp=0.61|em=444.68|eam=354.80|strat=NO_TRADE|auth=0
+```
+
+(one line in reality — wrapped here to fit)
+
+Paste it into the indicator's **Engine feed** input. Three rules make it
+safe to render:
+
+- **A field the engine could not measure is omitted, never sent as zero.**
+  A max pain of 0 draws a line at zero; an omitted one draws nothing and
+  the panel shows a dash. On a chart the gap between absent and zero is
+  the gap between nothing and a lie.
+- **A stale, mis-versioned or wrong-symbol feed withholds its values.**
+  Past the staleness window (30 min by default) the block goes red and
+  every chain-derived line disappears — an old max pain drawn as a fresh
+  one is worse than no line. A BANKNIFTY feed on a NIFTY chart is refused
+  outright: a plausible number in the wrong place is the hardest error to
+  notice.
+- **`auth` is always sent, including `auth=0`.** It is the one field whose
+  absence would read as "probably fine".
+
+The panel keeps the two provenances visually apart — `INDEX BRAIN
+(computed here)` above, `ENGINE FEED (measured elsewhere)` with its age
+below. Merging them into one list of numbers is how a chart starts
+implying it knows the option chain.
+
+### Why there is no entry / SL / TP box
+
+Not because it is hard to draw. A chart cannot run the Execution Gate,
+price a spread against a live book, or size against an account — and a box
+on a chart that looks like an authorized trade is the single most
+expensive thing this file could get wrong. The AUTHORIZATION row says
+`NOT AUTHORIZED` and names why; levels appear only when the feed says the
+engine authorized something, and then the console holds the legs and the
+size.
+
+What the chart *does* draw is the geometry it legitimately owns: support
+and resistance from swing pivots, the breakout range, supply and demand
+zones, the **invalidation level** (the price that would change the Index
+brain's mind — `IndexBrain._invalidations` rendered as a line), and a
+one-session expected-move band from realized volatility, at
+`0.7979·sigma` because that is the expected *absolute* move an ATM
+straddle prices, not one sigma.
+
 ## Setting it up
 
 **1. Run the receiver.**
