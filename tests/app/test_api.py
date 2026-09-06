@@ -548,3 +548,24 @@ class TestBriefEndpoint:
         assert methods <= {"GET", "HEAD", "OPTIONS"}, (
             f"A non-read method is exposed: {methods}"
         )
+
+
+class TestTradingViewPanel:
+    def test_it_reports_unavailable_rather_than_an_empty_list(
+        self, client: TestClient
+    ) -> None:
+        """An empty list reads as "no alerts fired". Capture being off is a
+        different fact and the operator needs to see which one it is."""
+        body = client.get("/api/tradingview").json()
+        assert "available" in body
+        if not body["available"]:
+            assert body["reason"]
+            assert body["alerts"] == []
+
+    def test_it_carries_the_age_of_the_last_alert(self, client: TestClient) -> None:
+        """A TradingView alert can stop firing without failing visibly — it
+        expires, or the account hits its alert limit — and from this side
+        that is indistinguishable from a quiet market."""
+        body = client.get("/api/tradingview").json()
+        if body["available"]:
+            assert "last_alert_at" in body

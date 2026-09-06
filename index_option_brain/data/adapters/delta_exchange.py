@@ -55,6 +55,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
@@ -207,9 +208,15 @@ class DeltaExchangeAdapter:
         client: DeltaClient,
         *,
         config: DeltaConfig | None = None,
+        clock: Callable[[], datetime] | None = None,
     ) -> None:
         self._client = client
         self._config = config or DeltaConfig()
+        # Injectable because the greeks cross-check depends on time to
+        # expiry: a fixture whose expiry has passed silently skips the
+        # check rather than failing it, so a test pinned to a wall clock
+        # stops testing anything on the day its expiry arrives.
+        self._clock = clock or (lambda: datetime.now(UTC))
 
     async def _call(self, fn: Any, /, **kwargs: Any) -> Any:
         """Run a synchronous client method off the event loop.
@@ -395,7 +402,7 @@ class DeltaExchangeAdapter:
         self, underlying_symbol: str, expiry: date
     ) -> list[OptionQuote]:
         rows = await self._chain_rows(underlying_symbol, expiry)
-        as_of = datetime.now(UTC)
+        as_of = self._clock()
         quotes: list[OptionQuote] = []
         for row in rows:
             quote = self._build_quote(row, as_of=as_of)

@@ -10,7 +10,7 @@ tests are what stops it drifting.
 from __future__ import annotations
 
 import json
-from datetime import date
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -62,7 +62,9 @@ class FakeClient:
 
 @pytest.fixture
 def adapter() -> DeltaExchangeAdapter:
-    return DeltaExchangeAdapter(FakeClient(), config=DeltaConfig())
+    return DeltaExchangeAdapter(
+        FakeClient(), config=DeltaConfig(), clock=lambda: BEFORE_EXPIRY
+    )
 
 
 class TestSymbolParsing:
@@ -133,7 +135,7 @@ class TestUnits:
             {"state": "live", "strike_price": "2000", "tick_size": "0.1",
              "underlying_asset": {"symbol": "BTC"}},
         ]
-        adapter = DeltaExchangeAdapter(FakeClient(products=sparse))
+        adapter = DeltaExchangeAdapter(FakeClient(products=sparse), clock=lambda: BEFORE_EXPIRY)
         assert (await adapter.get_index_spec("BTC")).strike_step is None
 
 
@@ -157,7 +159,7 @@ class TestImpliedVolatility:
             "ask_iv": "0.32",
             "mark_iv": "0.90",
         }
-        adapter = DeltaExchangeAdapter(FakeClient(chain=[row]))
+        adapter = DeltaExchangeAdapter(FakeClient(chain=[row]), clock=lambda: BEFORE_EXPIRY)
         chain = await adapter.get_option_chain("BTC", date(2026, 9, 6))
         assert chain[0].implied_volatility is None
 
@@ -169,9 +171,16 @@ class TestImpliedVolatility:
             "ask_iv": "0.34",
             "mark_iv": "0.32",
         }
-        adapter = DeltaExchangeAdapter(FakeClient(chain=[row]))
+        adapter = DeltaExchangeAdapter(FakeClient(chain=[row]), clock=lambda: BEFORE_EXPIRY)
         chain = await adapter.get_option_chain("BTC", date(2026, 9, 6))
         assert chain[0].implied_volatility == Decimal(32)
+
+
+#: The fixture's own symbols encode a 6 Sep 2026 expiry, so the greeks
+#: cross-check only runs against a clock before it. Pinning the clock here
+#: is what stops these tests quietly passing — the check is skipped once
+#: time to expiry goes non-positive — from 6 Sep 2026 onward.
+BEFORE_EXPIRY = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
 
 
 class TestGreeks:
@@ -199,17 +208,37 @@ class TestGreeks:
         comparison could never fail."""
         row = dict(CHAIN[0])
         row["greeks"] = {**(row.get("greeks") or {}), "delta": "0.99"}
-        adapter = DeltaExchangeAdapter(FakeClient(chain=[row]))
+        adapter = DeltaExchangeAdapter(FakeClient(chain=[row]), clock=lambda: BEFORE_EXPIRY)
         chain = await adapter.get_option_chain("BTC", date(2026, 9, 6))
 
         assert chain[0].greeks is not None
         assert float(chain[0].greeks.delta) != pytest.approx(0.99)
 
+    async def test_an_expired_contract_returns_the_published_greeks_unchecked(
+        self,
+    ) -> None:
+        """Past expiry there is no Black-Scholes value to compare against,
+        so the cross-check is skipped. Worth asserting rather than
+        discovering: a test whose fixture expiry has passed stops
+        exercising the check while still passing, which is how this suite
+        started agreeing with a delta of 0.99."""
+        row = dict(CHAIN[0])
+        row["greeks"] = {**(row.get("greeks") or {}), "delta": "0.99"}
+        adapter = DeltaExchangeAdapter(
+            FakeClient(chain=[row]),
+            clock=lambda: datetime(2026, 9, 7, 12, 0, tzinfo=UTC),
+        )
+        chain = await adapter.get_option_chain("BTC", date(2026, 9, 6))
+        assert chain[0].greeks is not None
+        assert float(chain[0].greeks.delta) == pytest.approx(0.99)
+
     async def test_the_cross_check_can_be_turned_off(self) -> None:
         row = dict(CHAIN[0])
         row["greeks"] = {**(row.get("greeks") or {}), "delta": "0.99"}
         adapter = DeltaExchangeAdapter(
-            FakeClient(chain=[row]), config=DeltaConfig(compute_greeks=False)
+            FakeClient(chain=[row]),
+            config=DeltaConfig(compute_greeks=False),
+            clock=lambda: BEFORE_EXPIRY,
         )
         chain = await adapter.get_option_chain("BTC", date(2026, 9, 6))
         assert chain[0].greeks is not None
@@ -260,12 +289,12 @@ class TestQuoteAndExpiries:
         assert all(isinstance(e, date) for e in expiries)
 
     async def test_an_empty_chain_is_refused(self) -> None:
-        adapter = DeltaExchangeAdapter(FakeClient(chain=[]))
+        adapter = DeltaExchangeAdapter(FakeClient(chain=[]), clock=lambda: BEFORE_EXPIRY)
         with pytest.raises(DataAdapterError, match="empty chain"):
             await adapter.get_option_chain("BTC", date(2026, 9, 6))
 
     async def test_no_live_products_is_refused(self) -> None:
-        adapter = DeltaExchangeAdapter(FakeClient(products=[]))
+        adapter = DeltaExchangeAdapter(FakeClient(products=[]), clock=lambda: BEFORE_EXPIRY)
         with pytest.raises(DataAdapterError, match="no live option products"):
             await adapter.get_index_spec("BTC")
 
@@ -274,7 +303,7 @@ class TestQuoteAndExpiries:
             def option_chain(self, **kw: Any) -> Any:
                 raise RuntimeError("connection reset")
 
-        adapter = DeltaExchangeAdapter(Broken())
+        adapter = DeltaExchangeAdapter(Broken(), clock=lambda: BEFORE_EXPIRY)
         with pytest.raises(DataAdapterError, match="Delta request failed"):
             await adapter.get_option_chain("BTC", date(2026, 9, 6))
 

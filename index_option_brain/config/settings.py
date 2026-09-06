@@ -64,6 +64,32 @@ class Settings(BaseSettings):
     a week of uptime. Empty disables persistence.
     """
 
+    tradingview_webhook_secret: str = Field(default="", alias="TRADINGVIEW_WEBHOOK_SECRET")
+    """The shared secret a TradingView alert must carry. Empty disables the
+    receiver entirely.
+
+    TradingView cannot sign a webhook, so this is the only credential the
+    request carries and it travels in the body. It has no default on
+    purpose: a receiver that starts with a well-known secret is an open
+    endpoint on the public internet.
+    """
+    tradingview_webhook_port: int = Field(default=8787, alias="TRADINGVIEW_WEBHOOK_PORT")
+    """The receiver's own port. Separate from the console's, because the
+    console is served on the tailnet and this one has to be reachable from
+    TradingView's servers."""
+    tradingview_allowed_ips: str = Field(default="", alias="TRADINGVIEW_ALLOWED_IPS")
+    """Comma-separated source addresses, or empty for TradingView's
+    published egress set. The literal string `any` turns the address check
+    off — needed behind a tunnel, where the peer address is the tunnel, and
+    spelled out so it is a decision rather than an oversight."""
+    tradingview_trust_forwarded_for: bool = Field(
+        default=False, alias="TRADINGVIEW_TRUST_FORWARDED_FOR"
+    )
+    """Whether to read the source address from X-Forwarded-For. Only with a
+    reverse proxy you control that overwrites the header — otherwise any
+    sender can name their own address and the allowlist stops meaning
+    anything."""
+
 
 @lru_cache
 def get_settings() -> Settings:

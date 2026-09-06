@@ -281,6 +281,7 @@ index_option_brain/
 ├── memory/          Postgres repository + Redis cache (interfaces)
 ├── feedback/        Feedback + learning engines (interfaces)
 ├── backtest/         Backtest/replay engine (interface)
+├── integrations/    TradingView: webhook receiver, guard, Pine mirror
 ├── database/        SQLAlchemy base + UUID/timestamp/version mixin
 ├── monitoring/       Observability metric names + sink protocol
 └── tests/
@@ -576,6 +577,45 @@ loss of roughly ₹10,000 needs about **₹10 lakh** of equity before the Risk
 Engine will authorize a single lot. Below that, `BELOW_MINIMUM_SIZE` is the
 correct and permanent answer. (That figure moved when the lot size was
 corrected from 75 to 65 — it scales directly with contract size.)
+
+## TradingView on live charts
+
+Full write-up in [docs/tradingview.md](docs/tradingview.md).
+
+Pine Script sees OHLCV for one symbol, which draws a hard line through
+this system. The whole Index brain (spec §5) is OHLC arithmetic and is
+therefore reproducible on a chart *exactly* —
+`index_option_brain/integrations/tradingview/pine/index_brain_mirror.pine`
+does that, deliberately avoiding `ta.ema`, `ta.rsi` and `ta.atr` because
+Pine's seeding and smoothing differ from the engine's and the numbers
+would quietly disagree. Everything the other three brains read — breadth,
+open interest, implied volatility, the parity forward, greeks, the
+volatility risk premium — needs the option chain, which Pine cannot see.
+
+So TradingView is a **detector**, not a decision layer: the chart supplies
+price events, and the engine still reads the chain and runs the Execution
+Gate before anything is authorized. The indicator's panel says so on
+screen, and an alert claiming a trigger a chart cannot observe (an IV
+collapse, a breadth change) is refused by the receiver.
+
+The webhook receiver is a **separate process on a separate port**, for two
+reasons pulling the same way: the console API is provably read-only (every
+route GET/HEAD/OPTIONS, with a test asserting it) and that is the boundary
+the assistant sits behind; and a webhook must be reachable from the public
+internet while the console is deliberately tailnet-only. The receiver
+holds a guard, an inbox and a sink and nothing else — a test walks its
+import graph and fails if any module there can reach execution, risk, a
+broker or an order.
+
+```bash
+export TRADINGVIEW_WEBHOOK_SECRET="$(openssl rand -hex 24)"
+python -m index_option_brain.integrations.tradingview   # :8787
+```
+
+It refuses to start without a secret. TradingView cannot sign a webhook,
+so the shared secret in the body is the only credential the request
+carries; it is compared in constant time, stripped before parsing, and has
+no field on any model that could hold it.
 
 ## Source spec
 

@@ -108,11 +108,39 @@ class Database:
         """
         return cls(url="sqlite+aiosqlite:///:memory:")
 
+    #: How long a SQLite writer waits for another writer's lock before
+    #: giving up, in seconds.
+    BUSY_TIMEOUT_SECONDS = 30.0
+
     @property
     def engine(self) -> AsyncEngine:
         if self._engine is None:
-            self._engine = create_async_engine(normalise_url(self.url), echo=self.echo)
+            url = normalise_url(self.url)
+            self._engine = create_async_engine(
+                url, echo=self.echo, connect_args=self._connect_args(url)
+            )
         return self._engine
+
+    def _connect_args(self, url: str) -> dict[str, object]:
+        """Driver options that depend on the backend.
+
+        SQLite needs a busy timeout because this deployment now has two
+        writers: the engine process capturing snapshots, and the
+        TradingView receiver recording accepted alerts. SQLite serialises
+        writers with a file lock, and the default behaviour is to fail
+        *immediately* with "database is locked" rather than to wait — so
+        without this, a chart alert arriving during a chain capture is
+        dropped for a lock that would have cleared in milliseconds. The
+        alert path answers 503 on a failed write, which would turn a
+        millisecond of contention into a red entry in TradingView's alert
+        log.
+
+        Postgres needs nothing here: it does not serialise writers this
+        way.
+        """
+        if url.startswith("sqlite"):
+            return {"timeout": self.BUSY_TIMEOUT_SECONDS}
+        return {}
 
     @property
     def dialect(self) -> str:

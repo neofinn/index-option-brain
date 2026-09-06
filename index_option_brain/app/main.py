@@ -44,6 +44,7 @@ from index_option_brain.data.providers import (
     verified_providers,
 )
 from index_option_brain.database.engine import Database
+from index_option_brain.integrations.tradingview.sink import pending_alerts
 
 
 def _console_path() -> Path:
@@ -709,6 +710,52 @@ def create_app(
             "symbol": symbol,
             "count": len(cycles),
             "cycles": cycles,
+        }
+
+    @app.get("/api/tradingview")
+    async def tradingview_alerts(limit: int = 25) -> dict[str, Any]:
+        """Chart alerts the webhook receiver has accepted, newest first.
+
+        This is the *read* half of the TradingView integration and it lives
+        here, on the tailnet, rather than on the receiver. The receiver
+        answers the public internet, and an endpoint there reporting how
+        many alerts fired and what they said would tell anyone who found
+        the URL what the system is watching.
+
+        `last_alert_at` is the reading that matters operationally. A
+        TradingView alert can stop firing without anything failing
+        visibly — it expires, or the account hits its alert limit — and
+        from this side that is indistinguishable from a quiet market. An
+        age is something an operator can judge; an empty list is not.
+        """
+        if live.capture is None:
+            return {
+                "available": False,
+                "reason": "No database configured, so accepted alerts are not recorded",
+                "alerts": [],
+            }
+        try:
+            events = await pending_alerts(live.capture.database, limit=min(limit, 200))
+        except Exception as exc:  # noqa: BLE001 - the console must still render
+            return {
+                "available": False,
+                "reason": f"Could not read recorded alerts: {exc}",
+                "alerts": [],
+            }
+        newest = events[-1] if events else None
+        return {
+            "available": True,
+            "count": len(events),
+            "last_alert_at": newest.timestamp.isoformat() if newest else None,
+            "alerts": [
+                {
+                    "event_id": event.event_id,
+                    "trigger_type": str(event.trigger_type),
+                    "fired_at": event.timestamp.isoformat(),
+                    **event.payload,
+                }
+                for event in reversed(events)
+            ],
         }
 
     @app.get("/", response_class=HTMLResponse)
