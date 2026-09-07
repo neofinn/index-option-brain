@@ -490,3 +490,150 @@ class TestRouteConfig:
         assert SignalRoute(
             name="x", destination=PullDestination(), symbol_map={"NIFTY": "N"}
         ).max_age <= timedelta(minutes=2)
+
+
+class TestExitAgainstAnHttpBroker:
+    """The defect a live run against a mock broker exposed.
+
+    Rendering the entry template for an exit produced
+    `{"transactionType": "EXIT", "quantity": 0}` — not an order any broker
+    accepts, and one a mock answers 200 to, so it looked like it worked
+    right up until it mattered. Closing a position means buying or selling
+    what is actually held, and the relay does not query the account.
+    """
+
+    async def test_an_exit_with_no_exit_template_is_refused(
+        self, database: Database
+    ) -> None:
+        relay, http = relay_over(database)
+        body = payload(action="exit")
+        del body["quantity"]
+        result = await relay.dispatch("tv-strategy", body)
+        assert result.outcome == Outcome.BLOCKED
+        assert "exit_body_template" in (result.reason or "")
+        assert http.calls == []
+
+    async def test_an_exit_template_is_used_when_present(
+        self, database: Database
+    ) -> None:
+        destination = HttpDestination(
+            url="https://api.broker.test/orders",
+            headers={"access-token": BROKER_TOKEN},
+            body_template={"side": "{action_upper}", "qty": "{quantity}"},
+            exit_body_template={"squareOff": True, "securityId": "{symbol}"},
+            exit_url="https://api.broker.test/positions/close",
+        )
+        relay, http = relay_over(
+            database, routes={"tv-strategy": route(destination=destination)}
+        )
+        body = payload(action="exit")
+        del body["quantity"]
+        result = await relay.dispatch("tv-strategy", body)
+        assert result.outcome == Outcome.SENT
+        assert http.calls[0]["url"] == "https://api.broker.test/positions/close"
+        assert http.calls[0]["json"] == {"squareOff": True, "securityId": "13"}
+
+    async def test_an_entry_still_uses_the_entry_url(self, database: Database) -> None:
+        destination = HttpDestination(
+            url="https://api.broker.test/orders",
+            body_template={"side": "{action_upper}"},
+            exit_body_template={"squareOff": True},
+            exit_url="https://api.broker.test/positions/close",
+        )
+        relay, http = relay_over(
+            database, routes={"tv-strategy": route(destination=destination)}
+        )
+        await relay.dispatch("tv-strategy", payload())
+        assert http.calls[0]["url"] == "https://api.broker.test/orders"
+
+    async def test_an_exit_on_a_pull_route_is_fine(self, database: Database) -> None:
+        """An EA reconciles to a target of zero, so "close everything" is
+        fully expressible there — the restriction is HTTP-only."""
+        relay, _ = relay_over(
+            database,
+            routes={
+                "ea": SignalRoute(
+                    name="ea",
+                    destination=PullDestination(),
+                    symbol_map={"NIFTY": "NIFTY.I"},
+                    enabled=True,
+                )
+            },
+        )
+        body = payload(action="exit")
+        del body["quantity"]
+        assert (await relay.dispatch("ea", body)).outcome == Outcome.SENT
+
+    async def test_the_audited_url_is_the_url_transmitted(
+        self, database: Database
+    ) -> None:
+        """The preview is what gets sent, not a second rendering — so what
+        the audit row says was transmitted is what was."""
+        destination = HttpDestination(
+            url="https://api.broker.test/orders",
+            body_template={"side": "{action_upper}"},
+            exit_body_template={"squareOff": True},
+            exit_url="https://api.broker.test/positions/close",
+        )
+        relay, http = relay_over(
+            database, routes={"tv-strategy": route(destination=destination)}
+        )
+        body = payload(action="exit")
+        del body["quantity"]
+        result = await relay.dispatch("tv-strategy", body)
+        assert result.request_preview is not None
+        assert result.request_preview["url"] == http.calls[0]["url"]
+
+
+class TestSenderVersusOperatorFault:
+    """Which refusals the sender should see as failures.
+
+    A rejection reported as a success puts a green tick in TradingView's
+    alert log for an alert that did nothing. A policy refusal reported as
+    a failure makes the operator's own guard look like a broken webhook.
+    """
+
+    async def test_a_malformed_payload_is_the_senders(
+        self, database: Database
+    ) -> None:
+        relay, _ = relay_over(database)
+        result = await relay.dispatch("tv-strategy", {"ticker": "NIFTY"})
+        assert result.sender_error is True
+
+    async def test_an_unmapped_ticker_is_the_senders(self, database: Database) -> None:
+        relay, _ = relay_over(database)
+        result = await relay.dispatch("tv-strategy", payload(ticker="BANKNIFTY"))
+        assert result.sender_error is True
+
+    async def test_a_quantity_ceiling_is_the_operators(
+        self, database: Database
+    ) -> None:
+        relay, _ = relay_over(database)
+        result = await relay.dispatch("tv-strategy", payload(quantity=99))
+        assert result.sender_error is False
+
+    async def test_a_daily_cap_is_the_operators(self, database: Database) -> None:
+        relay, _ = relay_over(
+            database, routes={"tv-strategy": route(max_orders_per_day=1)}
+        )
+        await relay.dispatch("tv-strategy", payload())
+        result = await relay.dispatch(
+            "tv-strategy", payload(bar_time="2026-09-07T04:11:00Z")
+        )
+        assert result.outcome == Outcome.BLOCKED
+        assert result.sender_error is False
+
+    async def test_the_kill_switch_is_the_operators(self, database: Database) -> None:
+        relay, _ = relay_over(database, environ={KILL_SWITCH_ENV: "1"})
+        result = await relay.dispatch("tv-strategy", payload())
+        assert result.sender_error is False
+
+    async def test_staleness_is_nobodys_fault(self, database: Database) -> None:
+        """Usually the network. Reporting it as the sender's would have
+        them hunting a template bug that is not there."""
+        relay, _ = relay_over(database)
+        result = await relay.dispatch(
+            "tv-strategy", payload(fired_at="2026-09-07T04:00:00Z")
+        )
+        assert result.outcome == Outcome.BLOCKED
+        assert result.sender_error is False

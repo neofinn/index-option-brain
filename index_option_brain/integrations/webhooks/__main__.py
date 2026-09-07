@@ -25,6 +25,7 @@ import asyncio
 import logging
 import sys
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -34,8 +35,11 @@ from index_option_brain.config.settings import Settings, get_settings
 from index_option_brain.data.http import HttpxSession
 from index_option_brain.database.engine import Database, sqlite_url
 from index_option_brain.integrations.tradingview.alert import (
+    DEFAULT_MAX_AGE,
     AlertRejected,
+    RejectionReason,
     alert_from_payload,
+    check_freshness,
 )
 from index_option_brain.integrations.tradingview.inbox import AlertInbox
 from index_option_brain.integrations.tradingview.sink import DatabaseAlertSink
@@ -44,7 +48,10 @@ from index_option_brain.integrations.webhooks.endpoints import (
     EndpointKind,
     load,
 )
-from index_option_brain.integrations.webhooks.gateway import create_gateway_app
+from index_option_brain.integrations.webhooks.gateway import (
+    HandlerNote,
+    create_gateway_app,
+)
 from index_option_brain.integrations.webhooks.store import DeliveryStore
 from index_option_brain.signals import routes as signal_routes
 from index_option_brain.signals.feed import create_signal_feed_router
@@ -59,33 +66,51 @@ logger = logging.getLogger(__name__)
 #: What the gateway hands a specialised endpoint kind, and what it expects
 #: back: a note for the sender, or None. Named because two factories below
 #: produce one and mypy needs the return type to be more than `Any`.
-DeliveryHandler = Callable[[Endpoint, dict[str, Any]], Awaitable[str | None]]
+DeliveryHandler = Callable[[Endpoint, dict[str, Any]], Awaitable[Any]]
 
 
 def tradingview_handler(
-    inbox: AlertInbox, sink: DatabaseAlertSink
+    inbox: AlertInbox,
+    sink: DatabaseAlertSink,
+    *,
+    max_age: timedelta = DEFAULT_MAX_AGE,
+    clock: Callable[[], datetime] | None = None,
 ) -> DeliveryHandler:
     """The strict alert path, as a gateway delivery handler.
 
     The gateway has already authenticated the delivery, stripped the
     credential and stored the payload — so a chart alert that fails
     validation here is still readable over the API. What this adds is the
-    claim check: an alert may only assert a trigger a chart could actually
-    observe, and one claiming an IV collapse is refused rather than turned
-    into an event.
+    claim check (an alert may only assert a trigger a chart could actually
+    observe) and the **freshness check**.
 
-    The reason string is returned rather than raised, because it reaches
-    TradingView's own alert log that way. A rejection only a server log
-    knows about is one the operator finds out about days later.
+    The freshness check is here because it was missing. `WebhookGuard`
+    enforces it on the standalone receiver, and this second way in was
+    written without it — so a ten-minute-old breakout arriving through the
+    gateway was accepted and woke the pipeline. Both callers now share one
+    definition in `tradingview.alert`.
+
+    Rejections come back as a `HandlerNote` marked as the sender's, which
+    the gateway answers 422 to. A 200 would put a green tick in
+    TradingView's own alert log for an alert that did nothing, and that log
+    is the only place the operator is looking.
     """
+    now = clock or (lambda: datetime.now(UTC))
 
-    async def handle(endpoint: Endpoint, payload: dict[str, Any]) -> str | None:
+    async def handle(endpoint: Endpoint, payload: dict[str, Any]) -> Any:
         try:
             alert = alert_from_payload(payload)
+            check_freshness(alert, now=now(), max_age=max_age)
             event = inbox.admit(alert)
         except AlertRejected as rejected:
             logger.info("%s: alert not accepted — %s", endpoint.slug, rejected)
-            return str(rejected.reason)
+            # A duplicate is not the sender's mistake: TradingView
+            # re-fires on a reconnect and the correct answer is "already
+            # handled", which is a success.
+            return HandlerNote(
+                str(rejected.reason),
+                sender_error=rejected.reason is not RejectionReason.DUPLICATE,
+            )
         await sink.record(event)
         return "accepted"
 
@@ -105,7 +130,7 @@ def delivery_handler(
     """
     tradingview = tradingview_handler(inbox, sink)
 
-    async def handle(endpoint: Endpoint, payload: dict[str, Any]) -> str | None:
+    async def handle(endpoint: Endpoint, payload: dict[str, Any]) -> Any:
         if endpoint.kind is EndpointKind.STRATEGY:
             result = await relay.dispatch(endpoint.slug, payload)
             if result.reason:
@@ -113,11 +138,14 @@ def delivery_handler(
                     "%s: %s — %s", endpoint.slug, result.outcome, result.reason
                 )
             # The outcome reaches TradingView's alert log, so a blocked
-            # signal is visible where the operator is already looking.
-            return (
+            # signal is visible where the operator is already looking —
+            # and a rejection the sender caused is reported as a failure
+            # so it shows red there rather than green.
+            return HandlerNote(
                 result.outcome
                 if not result.reason
-                else f"{result.outcome}: {result.reason}"
+                else f"{result.outcome}: {result.reason}",
+                sender_error=result.sender_error,
             )
         return await tradingview(endpoint, payload)
 

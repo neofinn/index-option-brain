@@ -14,6 +14,7 @@ from index_option_brain.integrations.webhooks.endpoints import (
 from index_option_brain.integrations.webhooks.gateway import (
     CREDENTIAL_FIELDS,
     MAX_BODY_BYTES,
+    HandlerNote,
     RateLimiter,
     create_gateway_app,
     parse_body,
@@ -34,6 +35,7 @@ __all__ = [
     "Endpoint",
     "EndpointKind",
     "EndpointStats",
+    "HandlerNote",
     "RateLimiter",
     "create_gateway_app",
     "load",

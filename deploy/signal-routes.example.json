@@ -52,6 +52,22 @@
         "quantity": "{quantity}",
         "correlationId": "{order_id}"
       },
+      "_exit_note": [
+        "An exit needs its OWN template, and without one the relay refuses",
+        "the signal rather than sending something that looks like an order.",
+        "Rendering the entry template for an exit produces",
+        "transactionType EXIT with quantity 0, which no broker accepts —",
+        "and which a mock broker answers 200 to, so it looks like it works",
+        "right up until it matters. Closing a position means buying or",
+        "selling what is actually held, and this relay does not query your",
+        "account so it cannot know what that is.",
+        "",
+        "Two shapes work. Uncomment exit_url + exit_body_template below for",
+        "a square-off endpoint; or leave allowed_actions as [buy, sell] and",
+        "have the STRATEGY send an explicit closing order instead of exit.",
+        "The second is safer: the size is then the strategy's, which knows",
+        "what it opened."
+      ],
       "timeout_seconds": 5
     },
     "symbol_map": { "NIFTY": "43492" },

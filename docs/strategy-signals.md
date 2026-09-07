@@ -164,6 +164,22 @@ Plain `http://` to a remote host is refused: the headers carry a broker
 token, and a relay is exactly the component nobody looks at again after it
 starts working. Loopback http is allowed, for a local bridge.
 
+**An exit needs its own template.** Rendering the entry template for an
+`exit` produces `{"transactionType": "EXIT", "quantity": 0}` — not an
+order any broker accepts, and one a mock broker answers 200 to, so it
+looks like it works right up until it matters. Closing a position means
+buying or selling what is actually held, and this relay does not query
+your account. So an `exit` on an HTTP destination with no
+`exit_body_template` is **refused**, with that reason in the audit row.
+
+Two shapes work: `exit_url` plus `exit_body_template` pointing at a
+square-off endpoint, or leaving `allowed_actions` as `["buy", "sell"]` and
+having the strategy send an explicit closing order. The second is safer —
+the size is then the strategy's, which knows what it opened.
+
+A `pull` destination has no such problem: an EA reconciles to a target of
+zero, so "close everything" is fully expressible there.
+
 Only header **names** reach the audit row. Knowing an `access-token`
 header was set is what you need when a broker answers 401; the value is
 the one thing that must never be stored.
@@ -241,6 +257,18 @@ one that is rehearsing are indistinguishable from the outside.
 route ea -> pull: dry run (max qty 2, 20/day, symbols BANKNIFTY,NIFTY)
 route broker -> http: LIVE — deliveries will be sent (max qty 1, 6/day, symbols NIFTY)
 ```
+
+## Testing it
+
+[docs/testing.md](testing.md) has the full bisect table. The short
+version: `scripts/mock_broker.py` is a broker that logs what you send it
+and places nothing — point a route at it, enable the route, and read the
+exact body a real broker would have received. `scripts/hook_test.py` fires
+22 realistic payloads at a running gateway and names which link broke.
+
+Both of those exist because the unit suite is not enough. The missing
+freshness check on the gateway path and the exit defect above both passed
+1600 tests and were found by running the thing.
 
 ## The guards are ceilings, not a strategy
 

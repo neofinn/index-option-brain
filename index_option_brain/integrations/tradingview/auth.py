@@ -46,6 +46,7 @@ from index_option_brain.integrations.tradingview.alert import (
     RejectionReason,
     TradingViewAlert,
     alert_from_payload,
+    check_freshness,
 )
 
 #: TradingView's published webhook egress addresses. Held as a default
@@ -184,20 +185,15 @@ class WebhookGuard:
         return payload
 
     def check_freshness(self, alert: TradingViewAlert) -> None:
-        now = self._clock()
-        age = now - alert.fired_at
-        if age > self._config.max_age:
-            raise AlertRejected(
-                RejectionReason.STALE,
-                f"alert fired {int(age.total_seconds())}s ago",
-            )
-        if -age > self._config.max_clock_skew:
-            # A future-dated alert is either a clock the sender controls or
-            # a fabricated body; both make the freshness window meaningless.
-            raise AlertRejected(
-                RejectionReason.FUTURE_DATED,
-                "alert is dated in the future beyond the allowed skew",
-            )
+        """Delegates to `alert.check_freshness`, which is the one
+        definition of the rule — the gateway's `tradingview` endpoint is
+        the other caller, and it was written without it."""
+        check_freshness(
+            alert,
+            now=self._clock(),
+            max_age=self._config.max_age,
+            max_skew=self._config.max_clock_skew,
+        )
 
     def admit(
         self,

@@ -68,6 +68,20 @@ class HttpDestination:
     url: str
     headers: dict[str, str] = field(default_factory=dict)
     body_template: dict[str, Any] = field(default_factory=dict)
+    #: The body for an `exit`, when the broker needs a different one — and
+    #: it almost always does. Rendering `body_template` for an exit
+    #: produces `transactionType: "EXIT"` with `quantity: 0`, which is not
+    #: an order any broker accepts: closing a position means buying or
+    #: selling what is actually held, and this relay does not query the
+    #: account so it cannot know what that is. Without this template an
+    #: exit on an HTTP destination is refused rather than sent as
+    #: something that looks like an order and is not.
+    #:
+    #: Two shapes work. A dedicated square-off endpoint, if the broker has
+    #: one; or a template using `{side_bs}`/`{action_upper}` where the
+    #: *strategy* sends an explicit closing buy or sell instead of "exit".
+    exit_body_template: dict[str, Any] = field(default_factory=dict)
+    exit_url: str = ""
     timeout_seconds: float = 5.0
     name: str = "http"
 
@@ -84,10 +98,22 @@ class HttpDestination:
             )
         if not self.body_template:
             raise ValueError("destination needs a body_template")
+        if self.exit_url and not self.exit_url.startswith(("http://", "https://")):
+            raise ValueError(f"destination exit_url must be http(s): {self.exit_url!r}")
 
     def _is_local(self) -> bool:
         host = self.url.split("://", 1)[1].split("/", 1)[0].split(":", 1)[0]
         return host in {"localhost", "127.0.0.1", "::1", "[::1]"}
+
+    @property
+    def handles_exit(self) -> bool:
+        return bool(self.exit_body_template)
+
+    def template_for(self, is_exit: bool) -> dict[str, Any]:
+        return self.exit_body_template if is_exit else self.body_template
+
+    def url_for(self, is_exit: bool) -> str:
+        return self.exit_url if (is_exit and self.exit_url) else self.url
 
 
 @dataclass(frozen=True)
@@ -159,6 +185,8 @@ def _destination_from(name: str, spec: dict[str, Any]) -> Destination:
         url=os.path.expandvars(str(spec.get("url", ""))),
         headers=headers,
         body_template=dict(spec.get("body_template") or {}),
+        exit_body_template=dict(spec.get("exit_body_template") or {}),
+        exit_url=os.path.expandvars(str(spec.get("exit_url", ""))),
         timeout_seconds=float(spec.get("timeout_seconds", 5.0)),
     )
 

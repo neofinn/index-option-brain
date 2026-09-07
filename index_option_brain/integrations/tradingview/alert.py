@@ -38,7 +38,7 @@ carry it.
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from typing import Any
@@ -117,6 +117,41 @@ TICKER_TO_SYMBOL: dict[str, str] = {
 _NAMESPACE = uuid.UUID("6f4d0f3a-6a1e-5c39-9d5f-1f1b6d2a8c74")
 
 _MAX_BODY_BYTES = 8192
+
+#: How stale an alert may be. TradingView does not retry, so a late
+#: delivery is a network fault or a replay, and acting on a ten-minute-old
+#: breakout is worse than dropping it.
+DEFAULT_MAX_AGE = timedelta(seconds=120)
+DEFAULT_MAX_SKEW = timedelta(seconds=30)
+
+
+def check_freshness(
+    alert: TradingViewAlert,
+    *,
+    now: datetime,
+    max_age: timedelta = DEFAULT_MAX_AGE,
+    max_skew: timedelta = DEFAULT_MAX_SKEW,
+) -> None:
+    """Raise unless the alert fired recently enough to act on.
+
+    Lives here rather than in `WebhookGuard` because there are two ways in
+    — the standalone receiver and the gateway's `tradingview` endpoint —
+    and the second one was written without this check. A rule with one
+    definition and two callers cannot drift; two copies of it already had.
+    """
+    age = now - alert.fired_at
+    if age > max_age:
+        raise AlertRejected(
+            RejectionReason.STALE,
+            f"alert fired {int(age.total_seconds())}s ago",
+        )
+    if -age > max_skew:
+        # A future-dated alert is either a clock the sender controls or a
+        # fabricated body; both make the freshness window meaningless.
+        raise AlertRejected(
+            RejectionReason.FUTURE_DATED,
+            "alert is dated in the future beyond the allowed skew",
+        )
 
 
 def resolve_symbol(ticker: str) -> str:

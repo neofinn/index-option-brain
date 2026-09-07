@@ -717,6 +717,29 @@ mode that first runs on the day it matters.
 the target against the live net position. `EnableTrading` is false by
 default, and it has not been run against a broker — demo first.
 
+## Testing it
+
+[docs/testing.md](docs/testing.md) — the bisect table, and two scripts:
+
+```bash
+python scripts/mock_broker.py                    # a broker that logs, places nothing
+python scripts/hook_test.py --base <url> ...     # 22 payloads at a running gateway
+```
+
+Worth saying why they exist: **1647 passing tests did not catch either of
+the two real bugs in the webhook path.** A live run of `hook_test.py`
+against a running gateway found that the gateway's TradingView endpoint
+had no freshness check — `WebhookGuard` enforces one on the standalone
+receiver, and the second way in was written without it, so a
+twenty-minute-old breakout was accepted and woke the pipeline. And reading
+`mock_broker.py`'s output found that an `exit` on an HTTP destination
+rendered `{"transactionType": "EXIT", "quantity": 0}`, which no broker
+accepts and a mock answers 200 to.
+
+Before any of that, point TradingView at [webhook.site](https://webhook.site)
+once. It answers the two questions nothing else can: whether your plan is
+actually sending webhooks, and what TradingView really puts in the body.
+
 ## Source spec
 
 Implemented from "Indian Index + Options Brain — Master Architecture &

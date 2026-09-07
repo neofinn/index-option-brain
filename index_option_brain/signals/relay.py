@@ -52,6 +52,7 @@ from index_option_brain.database.engine import Database
 from index_option_brain.database.models import SignalDispatchRow
 from index_option_brain.signals.contract import (
     Signal,
+    SignalAction,
     SignalRejected,
     signal_from_payload,
 )
@@ -90,6 +91,13 @@ class DispatchResult:
     request_preview: dict[str, Any] | None = None
     response_status: int | None = None
     signal: Signal | None = None
+    #: True when the payload itself was the problem — a malformed body, a
+    #: chart on a symbol this route does not map. False for every policy
+    #: refusal: a daily cap, a disabled route, an engaged kill switch and a
+    #: staleness drop are the operator's or the network's, and reporting
+    #: them to the sender as failures makes one's own guard look like a
+    #: broken webhook.
+    sender_error: bool = False
 
     @property
     def ok(self) -> bool:
@@ -232,7 +240,13 @@ class SignalRelay:
             return int((await session.execute(statement)).scalar_one() or 0)
 
     async def _record_blocked(
-        self, route: SignalRoute, signal: Signal | None, payload: dict[str, Any], reason: str
+        self,
+        route: SignalRoute,
+        signal: Signal | None,
+        payload: dict[str, Any],
+        reason: str,
+        *,
+        sender_error: bool = False,
     ) -> DispatchResult:
         """A refusal is written down too.
 
@@ -266,7 +280,12 @@ class SignalRelay:
             # A repeat of an already-blocked signal. The refusal is already
             # on record; writing it again adds nothing.
             pass
-        return DispatchResult(outcome=Outcome.BLOCKED, reason=reason, signal=signal)
+        return DispatchResult(
+            outcome=Outcome.BLOCKED,
+            reason=reason,
+            signal=signal,
+            sender_error=sender_error,
+        )
 
     async def dispatch(self, route_name: str, payload: dict[str, Any]) -> DispatchResult:
         """Take one strategy alert as far as its route allows."""
@@ -286,7 +305,11 @@ class SignalRelay:
         try:
             signal = signal_from_payload(payload)
         except SignalRejected as rejected:
-            return await self._record_blocked(route, None, payload, rejected.reason)
+            # The alert template is wrong. The sender has to see this as a
+            # failure or they will never look at it.
+            return await self._record_blocked(
+                route, None, payload, rejected.reason, sender_error=True
+            )
 
         if signal.action not in route.allowed_actions:
             return await self._record_blocked(
@@ -295,11 +318,14 @@ class SignalRelay:
 
         symbol = route.symbol_for(signal.ticker)
         if symbol is None:
+            # Usually a chart left on the wrong symbol, which is the
+            # sender's to fix and invisible to them unless it is reported.
             return await self._record_blocked(
                 route,
                 signal,
                 payload,
                 f"ticker {signal.ticker!r} is not in this route's symbol map",
+                sender_error=True,
             )
 
         age = (self._clock() - signal.fired_at).total_seconds()
@@ -337,6 +363,24 @@ class SignalRelay:
                 signal,
                 payload,
                 f"daily cap reached ({sent}/{route.max_orders_per_day})",
+            )
+
+        destination = route.destination
+        if (
+            isinstance(destination, HttpDestination)
+            and signal.action is SignalAction.EXIT
+            and not destination.handles_exit
+        ):
+            # Refused rather than sent. Rendering the entry template for an
+            # exit produces transactionType "EXIT" with quantity 0, which
+            # no broker accepts — and which a mock broker answers 200 to,
+            # so it looks like it worked right up until it matters.
+            return await self._record_blocked(
+                route,
+                signal,
+                payload,
+                "this HTTP destination has no exit_body_template, and an "
+                "entry template cannot express closing a position",
             )
 
         try:
@@ -381,10 +425,13 @@ class SignalRelay:
                 "symbol": symbol,
                 "signal": signal.as_dict(),
             }
-        body = render_body(destination.body_template, template_fields(signal, symbol))
+        is_exit = signal.action is SignalAction.EXIT
+        body = render_body(
+            destination.template_for(is_exit), template_fields(signal, symbol)
+        )
         return {
             "destination": "http",
-            "url": destination.url,
+            "url": destination.url_for(is_exit),
             "header_names": sorted(destination.headers),
             "body": body,
         }
@@ -478,7 +525,9 @@ class SignalRelay:
         assert isinstance(destination, HttpDestination)
         try:
             response = await self._session.post(
-                destination.url,
+                # From the preview, so what was audited is exactly what is
+                # transmitted — including the exit URL when there is one.
+                str(preview["url"]),
                 json=preview["body"],
                 headers=destination.headers,
             )

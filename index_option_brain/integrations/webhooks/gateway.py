@@ -61,6 +61,7 @@ import logging
 import time
 from collections import deque
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -106,6 +107,28 @@ CREDENTIAL_FIELDS = frozenset(
         "ingest_secret",
     }
 )
+
+
+@dataclass(frozen=True)
+class HandlerNote:
+    """What a specialised handler tells the sender, and whose fault it is.
+
+    The distinction matters because the two look identical from the
+    gateway's side and must not look identical to the sender. A handler
+    that *crashed* is our problem: the delivery is stored and readable, so
+    the sender is told 200 and should not retry. A handler that *rejected*
+    the payload is the sender's problem — a template claiming data a chart
+    cannot see, a chart on the wrong symbol — and answering 200 there puts
+    a green tick in TradingView's alert log for an alert that did nothing.
+
+    Policy refusals are deliberately NOT sender errors: a daily cap, a
+    disabled route or an engaged kill switch are the operator's decisions,
+    and reporting them as failures would make one's own guard look like a
+    broken webhook.
+    """
+
+    note: str
+    sender_error: bool = False
 
 
 def strip_credentials(payload: dict[str, Any]) -> dict[str, Any]:
@@ -356,6 +379,15 @@ def create_gateway_app(
                 result = on_delivery(endpoint, stored)
                 if hasattr(result, "__await__"):
                     result = await result
+                if isinstance(result, HandlerNote):
+                    return JSONResponse(
+                        {
+                            "ok": not result.sender_error,
+                            "seq": seq,
+                            "handler": result.note,
+                        },
+                        status_code=422 if result.sender_error else 200,
+                    )
                 if isinstance(result, str):
                     return JSONResponse(
                         {"ok": True, "seq": seq, "handler": result}, status_code=200
