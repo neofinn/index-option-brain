@@ -23,10 +23,16 @@ every delivery the endpoint ever received.
 `raw` stores the payload and serves it back — the general push-to-pull
 bridge. `tradingview` additionally runs the strict alert validation in
 `integrations.tradingview`, so a chart alert still cannot claim a trigger
-a chart could not observe. A `raw` endpoint deliberately validates
-nothing: it exists to carry payloads whose shape this system does not
-know, and a gateway that rejected what it did not understand would be
-useless for exactly that job.
+a chart could not observe. `strategy` hands the payload to
+`signals.relay`, which may forward it to a broker or hold it for an
+Expert Advisor to poll; that is the only kind whose delivery can leave the
+machine, and it does nothing until the matching route is enabled on the
+box.
+
+A `raw` endpoint deliberately validates nothing: it exists to carry
+payloads whose shape this system does not know, and a gateway that
+rejected what it did not understand would be useless for exactly that
+job.
 """
 
 from __future__ import annotations
@@ -55,6 +61,11 @@ DEFAULT_RETAIN = 500
 class EndpointKind(StrEnum):
     RAW = "raw"
     TRADINGVIEW = "tradingview"
+    #: A TradingView *strategy* alert: an order intent, not an
+    #: observation. Handled by `signals.relay`, which is the one path in
+    #: this system where a webhook can cause an outbound order — and which
+    #: is off until an operator enables the matching route.
+    STRATEGY = "strategy"
 
 
 @dataclass(frozen=True)

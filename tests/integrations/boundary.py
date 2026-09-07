@@ -18,6 +18,13 @@ PACKAGE = Path(__file__).resolve().parents[2] / "index_option_brain"
 
 FORBIDDEN_SEGMENTS = ("execution", "risk", "broker", "order")
 
+#: What this proves, and what it does not. It shows a module cannot reach
+#: this repository's own order path. It does NOT prove a module cannot
+#: place an order at all: `signals.relay` calls a broker's REST endpoint
+#: directly over HTTP and imports none of these names. That capability is
+#: bounded by configuration and by `tests/signals/`, not by this walk —
+#: see `tests/integrations/webhooks/test_boundary.py`.
+
 
 def _module_path(name: str) -> Path | None:
     relative = Path(*name.split(".")[1:])

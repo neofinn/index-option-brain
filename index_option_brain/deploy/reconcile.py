@@ -53,6 +53,13 @@ FORBIDDEN_KEYS: frozenset[str] = frozenset(
         "kill_switch_enabled",
         "live_trading",
         "broker_enabled",
+        # The signal relay's switches. A route with `enabled: true` turns a
+        # TradingView webhook into a broker order with nothing in this
+        # repository between them, so the same rule applies: a human at the
+        # machine, never a pushed commit.
+        "signal_routes_file",
+        "signal_relay_kill",
+        "signal_relay_enabled",
         # Credentials of any kind
         "dhan_client_id",
         "dhan_access_token",

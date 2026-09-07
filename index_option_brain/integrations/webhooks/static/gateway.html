@@ -254,6 +254,16 @@ footer code{font-family:"IBM Plex Mono",monospace}
         <pre class="snip" id="snip"></pre>
       </section>
 
+      <section class="card" id="routeCard" hidden>
+        <h2>Relay route <span class="right" id="routeMeta"></span></h2>
+        <div class="body" id="routeBody"></div>
+      </section>
+
+      <section class="card" id="signalCard" hidden>
+        <h2>Relayed signals <span class="right">what an EA or broker receives</span></h2>
+        <div class="feed" id="signalFeed"></div>
+      </section>
+
       <section class="card" id="feedCard" hidden>
         <h2>Deliveries <span class="right" id="feedMeta"></span></h2>
         <div class="feed" id="feed"></div>
@@ -275,6 +285,7 @@ footer code{font-family:"IBM Plex Mono",monospace}
     <span>Credential-looking body fields are stripped before storage.</span>
     <span>Body cap <code>64 KB</code></span>
     <span>Rate <code>120/min</code> per endpoint</span>
+    <span>Relay routes are off until enabled on the machine.</span>
   </footer>
 </div>
 
@@ -347,7 +358,7 @@ function paintJson(value){
 }
 
 /* ---------- snippet generation ---------- */
-var LANGS = ['curl', 'python', 'node', 'sheets', 'tradingview'];
+var LANGS = ['curl', 'python', 'node', 'sheets', 'tradingview', 'strategy', 'mql'];
 
 function snippetFor(lang, cfg){
   var base = cfg.base.replace(/\/+$/, '');
@@ -439,6 +450,68 @@ function snippetFor(lang, cfg){
       '}',
       '',
       '<span class="c">// Then: Triggers &rarr; pullDeliveries &rarr; every 5 minutes.</span>'
+    ].join('\n');
+  }
+  if(lang === 'strategy'){
+    return [
+      '<span class="c">// A STRATEGY alert — an order intent, not an observation.</span>',
+      '<span class="c">// Needs a gateway endpoint with kind:"strategy" AND a route</span>',
+      '<span class="c">// of the same slug in var/signal-routes.json.</span>',
+      '<span class="c">//</span>',
+      '<span class="c">// Send target_position, not just the action. Webhooks are</span>',
+      '<span class="c">// at-most-once: one lost alert leaves a delta relay out of</span>',
+      '<span class="c">// step with the chart forever. A target self-heals.</span>',
+      '',
+      '<span class="c">// Alert -> Webhook URL:</span>',
+      '<span class="s">' + base + '/hook/' + slug + '</span>',
+      '',
+      '<span class="c">// Alert -> Message:</span>',
+      '{',
+      '  <span class="k">"secret"</span>: <span class="s">"' + ingest + '"</span>,',
+      '  <span class="k">"strategy"</span>: <span class="s">"orb-nifty"</span>,',
+      '  <span class="k">"ticker"</span>: <span class="s">"{{ticker}}"</span>,',
+      '  <span class="k">"action"</span>: <span class="s">"{{strategy.order.action}}"</span>,',
+      '  <span class="k">"quantity"</span>: <span class="s">"{{strategy.order.contracts}}"</span>,',
+      '  <span class="k">"target_position"</span>: <span class="s">"{{strategy.position_size}}"</span>,',
+      '  <span class="k">"market_position"</span>: <span class="s">"{{strategy.market_position}}"</span>,',
+      '  <span class="k">"order_id"</span>: <span class="s">"{{strategy.order.id}}"</span>,',
+      '  <span class="k">"price"</span>: <span class="s">"{{close}}"</span>,',
+      '  <span class="k">"bar_time"</span>: <span class="s">"{{time}}"</span>,',
+      '  <span class="k">"fired_at"</span>: <span class="s">"{{timenow}}"</span>,',
+      '  <span class="k">"comment"</span>: <span class="s">"{{strategy.order.comment}}"</span>',
+      '}',
+      '',
+      '<span class="c">// A signal with neither quantity nor target is REFUSED,</span>',
+      '<span class="c">// not defaulted to one lot. An exit needs neither.</span>'
+    ].join('\n');
+  }
+  if(lang === 'mql'){
+    return [
+      '<span class="c">// MT4/MT5 cannot be POSTed to — no listening socket — so</span>',
+      '<span class="c">// the EA polls. Ship IndexBrainSignals.mq5 and set:</span>',
+      '',
+      '  GatewayBase = <span class="s">"' + base + '"</span>',
+      '  RouteSlug   = <span class="s">"' + slug + '"</span>',
+      '  ReadToken   = <span class="s">"' + read + '"</span>',
+      '',
+      '<span class="c">// Then, in the terminal:</span>',
+      '<span class="c">//   Tools -> Options -> Expert Advisors</span>',
+      '<span class="c">//   [x] Allow WebRequest for listed URL</span>',
+      '<span class="c">//   add exactly:  ' + base + '</span>',
+      '<span class="c">// Without it WebRequest returns -1, error 4014, and no</span>',
+      '<span class="c">// EA can work around that from inside itself.</span>',
+      '',
+      '<span class="c">// What the EA reads:</span>',
+      'GET <span class="s">' + base + '/v1/' + slug + '/signals.csv?since=0</span>',
+      '',
+      '<span class="n">#cursor=124</span>',
+      'seq,fired_at,strategy,symbol,action,quantity,target,price,order_id',
+      '<span class="n">124</span>,2026-09-07T04:15:00+00:00,orb-nifty,NIFTY.I,buy,<span class="n">1</span>,<span class="n">1</span>,,',
+      '',
+      '<span class="c">// Cursor line first, so the EA reads it without counting</span>',
+      '<span class="c">// lines. Column order is fixed: an EA reads by index, and</span>',
+      '<span class="c">// inserting a column would shift every deployed one.</span>',
+      '<span class="c">// Only SENT rows appear — a dry-run route feeds nothing.</span>'
     ].join('\n');
   }
   return [
@@ -649,6 +722,8 @@ function select(ep){
   renderEndpoints(); renderUrls(); renderSnippet();
   $('feedCard').hidden = false;
   refreshFeed();
+  refreshRoute();
+  refreshSignals();
 }
 
 async function refreshFeed(){
@@ -689,9 +764,85 @@ function renderFeed(body){
   });
 }
 
+async function refreshRoute(){
+  if(!state.selected) return;
+  var slug = state.selected.slug;
+  var host = $('routeBody');
+  try {
+    var r = await fetch('/v1/' + encodeURIComponent(slug) + '/routes', {headers: authHeaders()});
+    if(!r.ok){ $('routeCard').hidden = true; $('signalCard').hidden = true; return; }
+    var body = await r.json();
+    if(state.selected.slug !== slug) return;
+    if(!body.configured){
+      $('routeCard').hidden = false;
+      $('signalCard').hidden = true;
+      $('routeMeta').textContent = slug;
+      host.innerHTML = '<p class="note">No relay route for this endpoint. Deliveries are stored and served back, and nothing leaves the machine.</p>';
+      return;
+    }
+    $('routeCard').hidden = false;
+    $('signalCard').hidden = false;
+    $('routeMeta').textContent = body.destination;
+    /* Stated for both states, prominently. A relay that is live and one
+       that is rehearsing are indistinguishable from the delivery feed —
+       a dry run simply produces no signals, which looks exactly like a
+       quiet strategy. */
+    host.innerHTML =
+      '<div class="row"><span class="chip ' + (body.enabled ? 'bad' : 'ok') + '">' +
+        (body.enabled ? 'LIVE — orders will be sent' : 'dry run — nothing is sent') +
+      '</span></div>' +
+      '<div class="kv">' +
+      '<div class="urlline"><span class="tag">symbols</span><code>' + esc(body.symbols.join(', ')) + '</code><span></span></div>' +
+      '<div class="urlline"><span class="tag">actions</span><code>' + esc(body.allowed_actions.join(', ')) + '</code><span></span></div>' +
+      '<div class="urlline"><span class="tag">max qty</span><code>' + esc(body.max_quantity) + '</code><span></span></div>' +
+      '<div class="urlline"><span class="tag">per day</span><code>' + body.max_orders_per_day + '</code><span></span></div>' +
+      '<div class="urlline"><span class="tag">max age</span><code>' + body.max_age_seconds + 's</code><span></span></div>' +
+      '</div>' +
+      (body.enabled
+        ? '<div class="warnbox"><b>This route bypasses the brain.</b> Nothing in it consults the Regime Engine, the Risk Engine or the Execution Gate — the TradingView strategy is the only thing deciding. <code class="inl">SIGNAL_RELAY_KILL=1</code> stops every route.</div>'
+        : '<p class="note">A dry run is a full rehearsal: it validates, maps the symbol, applies every guard and records exactly what it would have transmitted.</p>');
+  } catch(e){ /* retried on the next tick */ }
+}
+
+async function refreshSignals(){
+  if(!state.selected) return;
+  var slug = state.selected.slug;
+  try {
+    var r = await fetch('/v1/' + encodeURIComponent(slug) + '/signals?since=0&limit=25',
+                        {headers: authHeaders()});
+    if(!r.ok) return;
+    var body = await r.json();
+    if(state.selected.slug !== slug) return;
+    var host = $('signalFeed');
+    host.innerHTML = '';
+    if(!body.signals.length){
+      host.innerHTML = '<div class="empty">No signals have been relayed.<br>A dry-run route records its rehearsals but feeds nothing here.</div>';
+      return;
+    }
+    body.signals.slice().reverse().forEach(function(sig){
+      var el = document.createElement('div');
+      el.className = 'dlv';
+      var when = new Date(sig.sent_at || sig.received_at);
+      el.innerHTML =
+        '<div class="head"><span class="seq">#' + sig.seq + '</span>' +
+        '<span class="when">' + esc(when.toLocaleTimeString()) + '</span>' +
+        '<span>' + esc(sig.strategy) + '</span></div>' +
+        '<div class="row">' +
+        '<span class="chip ' + (sig.action === 'buy' ? 'ok' : sig.action === 'sell' ? 'bad' : 'warn') + '">' + esc(sig.action) + '</span>' +
+        '<span class="chip">' + esc(sig.symbol || sig.ticker) + '</span>' +
+        (sig.quantity ? '<span class="chip">qty ' + esc(sig.quantity) + '</span>' : '') +
+        (sig.target_position !== null ? '<span class="chip">target ' + esc(sig.target_position) + '</span>' : '') +
+        '</div>';
+      host.appendChild(el);
+    });
+  } catch(e){ /* retried on the next tick */ }
+}
+
 function startPolling(){
   if(state.poller) clearInterval(state.poller);
-  state.poller = setInterval(function(){ refreshFeed(); loadEndpoints(); }, 5000);
+  state.poller = setInterval(function(){
+    refreshFeed(); refreshSignals(); loadEndpoints();
+  }, 5000);
 }
 
 $('connectBtn').addEventListener('click', function(){

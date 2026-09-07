@@ -45,11 +45,19 @@ Three processes, three exposure profiles:
 | `index-brain-tradingview` | public | strict chart alerts only |
 | `index-brain-gateway` | public | any sender, serves deliveries back |
 
-The gateway cannot reach an order path — an import-graph test walks the
-package and fails the build if any module there imports `execution`,
-`risk`, a broker or an order. A delivery cannot become a trade here.
-Turning one into a decision is the engine's job, done by polling this API
-like any other consumer.
+The gateway **service** cannot reach an order path — an import-graph test
+walks `gateway.py`, `endpoints.py` and `store.py` and fails the build if
+any of them imports `execution`, `risk`, a broker, an order, or the signal
+relay. A delivery reaching a `raw` or `tradingview` endpoint cannot become
+a trade.
+
+That is no longer the whole story. `__main__.py` wires in the signal
+relay, so a delivery to a **`strategy`** endpoint with an enabled route
+can cause an outbound broker order — see
+[docs/strategy-signals.md](strategy-signals.md). A second test asserts
+that `__main__.py` is the *only* file in the package that imports the
+relay, so "can this place an order" stays a question with one file as its
+answer.
 
 ## Two credentials, never one
 
@@ -165,12 +173,14 @@ Served same-origin, so its `fetch` calls need no CORS header. Adding one
 would mean any page anywhere could be made to read this gateway with a
 token its viewer pasted somewhere else.
 
-## Deliberately not built: forwarding
+## Forwarding: built, on the terms named here
 
 The other reading of "convert a webhook" is to relay it onward — receive,
-transform, POST somewhere else. Not here, because an inbound endpoint that
-will POST to any URL you name is an open relay: whoever holds the ingest
-secret picks the destination, and the destination list is exactly the kind
-of thing that ends up edited from a web page. If it is built, the
-destination allowlist belongs in the registry file beside the credentials,
-and the same rule applies — configured on the machine, not from the page.
+transform, POST somewhere else. That exists now for `strategy` endpoints,
+and it follows the rule this file set out before it did: **the sender picks
+what, the operator picks where.** The destination URL, headers and body
+template live in `var/signal-routes.json` on the machine, and there is
+deliberately no way to name a destination from the payload. An inbound
+endpoint that will POST to any URL its caller supplies is an open relay.
+
+See [docs/strategy-signals.md](strategy-signals.md).

@@ -76,6 +76,16 @@ class Settings(BaseSettings):
     page that can be used to mint them by whoever reaches it.
     """
     webhook_gateway_port: int = Field(default=8788, alias="WEBHOOK_GATEWAY_PORT")
+    signal_routes_file: str = Field(
+        default="var/signal-routes.json", alias="SIGNAL_ROUTES_FILE"
+    )
+    """The relay's route table: where a strategy signal may go, and how far.
+
+    Absent means no route exists and no signal can leave the machine, which
+    is the correct default. Every route in it is additionally off until its
+    own `enabled` is set — see `signals.relay`, which does not consult the
+    brains, the Risk Engine or the Execution Gate.
+    """
     """The gateway's own port, separate from the console's and the
     TradingView receiver's. All three have different exposure: the console
     is tailnet-only, the other two answer the public internet."""

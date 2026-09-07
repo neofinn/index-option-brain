@@ -282,6 +282,7 @@ index_option_brain/
 ├── feedback/        Feedback + learning engines (interfaces)
 ├── backtest/         Backtest/replay engine (interface)
 ├── integrations/    TradingView receiver + Pine mirror; webhook-to-API gateway
+├── signals/         Strategy signal contract, route table, guarded relay, EA feed
 ├── database/        SQLAlchemy base + UUID/timestamp/version mixin
 ├── monitoring/       Observability metric names + sink protocol
 └── tests/
@@ -656,9 +657,58 @@ but the body to put its secret; persisting it would serve the weaker
 credential back over the read API as the stronger one. Whole field names
 only, recursively — `secret_santa_id` is content.
 
-The gateway holds no broker credentials and cannot reach an order path; an
-import-graph test fails the build if that changes. A delivery becomes a
-decision only when the engine polls this API like any other consumer.
+The gateway *service* holds no broker credentials and cannot reach an
+order path; an import-graph test fails the build if that changes. For
+`raw` and `tradingview` endpoints a delivery becomes a decision only when
+the engine polls this API like any other consumer.
+
+`strategy` endpoints are the exception, and they are the subject of the
+next section.
+
+## Strategy signals to a broker or an EA
+
+Full write-up in [docs/strategy-signals.md](docs/strategy-signals.md).
+
+A TradingView *indicator* alert is an observation. A TradingView
+*strategy* alert is an order intent, and a `strategy` endpoint on the
+gateway hands it to `signals.relay`, which either POSTs it to a broker's
+REST API or holds it for an MT4/MT5 Expert Advisor to poll.
+
+**Read the relay's docstring before enabling a route.** Nothing in this
+path consults the nine brains, the Regime Engine, the Risk Engine or the
+Execution Gate. Enabling a route delegates the decision to the TradingView
+strategy and to nothing else here. It is a legitimate thing to want and it
+is the largest reduction in safety this codebase has, so it is stated
+rather than discovered. Routes are off until an operator changes a file on
+the machine, and `SIGNAL_RELAY_KILL=1` stops all of them regardless.
+
+Four decisions worth knowing:
+
+**Relay the target, not the action.** TradingView sends both a delta
+(`strategy.order.action`) and the resulting position
+(`strategy.position_size`). Webhooks are at-most-once, so one lost alert
+leaves a delta relay permanently out of step with the chart. A relay that
+reconciles a target self-heals on the next signal.
+
+**Nothing is invented.** A signal with neither a quantity nor a target is
+refused, not defaulted to one lot. An `exit` is the exception — its target
+is flat, which is a fact rather than a guess.
+
+**Idempotency is a unique constraint, not a memory set.** TradingView
+re-fires on a reconnect and replays on a chart reload. In memory that
+check does not survive the restart that happens between the two
+deliveries. A `FAILED` send does not free the key: the previous attempt
+may have reached the broker, and a blind retry is how one intent becomes
+two positions.
+
+**A dry run is a full rehearsal.** A disabled route still validates, maps
+the symbol, applies every guard, renders exactly what it would have
+transmitted, and stores it. A dry-run mode that exercises nothing is a
+mode that first runs on the day it matters.
+
+`signals/mql/IndexBrainSignals.mq5` is a working poller that reconciles
+the target against the live net position. `EnableTrading` is false by
+default, and it has not been run against a broker — demo first.
 
 ## Source spec
 

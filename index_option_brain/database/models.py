@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from decimal import Decimal
 from typing import Any, ClassVar
 
 from sqlalchemy import (
@@ -402,6 +403,61 @@ class WebhookDeliveryRow(Base):
     #: and the auth layer strips it from the parsed form.
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     body_bytes: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+
+class SignalDispatchRow(Base):
+    """Every strategy signal this system was asked to relay, and what
+    happened to it.
+
+    The unique constraint on `(route, idempotency_key)` is the load-bearing
+    part. TradingView re-fires an alert on a reconnect and replays one on a
+    chart reload, so the same intent arrives more than once — and the
+    consequence of handling that in memory is that a relay restart between
+    the two deliveries places the order twice. In the database it is
+    atomic, survives a restart, and holds even with two relay processes.
+
+    Rows are written for **blocked and dry-run signals too**. An audit
+    trail that records only what was sent cannot answer the question
+    actually asked after a bad day, which is what was refused and why.
+    """
+
+    __tablename__ = "signal_dispatches"
+    __table_args__ = (
+        UniqueConstraint("route", "idempotency_key", name="uq_dispatch_idem"),
+        Index("ix_dispatch_route_time", "route", "received_at"),
+    )
+
+    seq: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    route: Mapped[str] = mapped_column(String(64), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    strategy: Mapped[str] = mapped_column(String(64), nullable=False)
+    ticker: Mapped[str] = mapped_column(String(32), nullable=False)
+    #: The destination's own symbol, after the route's map. Kept beside the
+    #: TradingView ticker because a wrong mapping is invisible if only one
+    #: of the two is recorded.
+    symbol: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    action: Mapped[str] = mapped_column(String(8), nullable=False)
+    quantity: Mapped[Decimal | None] = mapped_column(Numeric(18, 6), nullable=True)
+    target_position: Mapped[Decimal | None] = mapped_column(
+        Numeric(18, 6), nullable=True
+    )
+    received_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    #: CLAIMED, SENT, DRY_RUN, BLOCKED or FAILED. A row left at CLAIMED is
+    #: a relay that died mid-send, which is a state worth being able to see
+    #: rather than one to overwrite optimistically.
+    outcome: Mapped[str] = mapped_column(String(16), nullable=False)
+    reason: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    #: Exactly what would have been, or was, transmitted — credentials
+    #: excluded. This is what makes a dry run a rehearsal rather than a
+    #: mode where nothing is exercised until the day it matters.
+    request_preview: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    response_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    response_body: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class SystemEventRow(Base, Recorded):
