@@ -83,6 +83,74 @@ TradingView's egress addresses matches nothing and rejects everything —
 with a 401 that looks exactly like a wrong secret. The gateway logs a
 warning at startup when an allowlist is set and this is not.
 
+### The domain: `hooks.neofl.site`
+
+Everything in this repo is pointed at that name. A **subdomain**, not the
+apex, for one concrete reason: `neofl.site` already resolves to
+`103.216.171.56`, which is not the trading box — so putting the webhook on
+the apex would mean repointing whatever that is. `hooks.neofl.site` does
+not exist yet, so it is free to take.
+
+**Path A — Caddy on the VPS.** One DNS record, then the certificate takes
+care of itself:
+
+```
+A    hooks.neofl.site    151.243.146.9
+```
+
+```bash
+sudo cp deploy/Caddyfile /etc/caddy/Caddyfile   # already names the host
+sudo systemctl reload caddy
+python scripts/domain_check.py \
+    --host hooks.neofl.site --expect-ip 151.243.146.9
+```
+
+Ports 80 **and** 443 have to be reachable. 80 is not optional even though
+TradingView will use 443: Caddy needs it for the ACME HTTP-01 challenge,
+so without it the certificate never issues and never renews.
+
+**Path B — Cloudflare Tunnel.** No open ports, no A record to manage:
+
+```bash
+cloudflared tunnel login
+cloudflared tunnel create index-brain
+cloudflared tunnel route dns index-brain hooks.neofl.site
+sudo cp deploy/cloudflared-config.yml /etc/cloudflared/config.yml
+sudo cloudflared service install
+```
+
+`tunnel route dns` creates the record itself — **but only if
+`neofl.site`'s nameservers are already Cloudflare's.** The apex resolving
+to `103.216.171.56` suggests they are not, in which case either move the
+domain's DNS to Cloudflare or take Path A and add the A record at your
+current host.
+
+Either way, set `WEBHOOK_TRUST_FORWARDED_FOR=1` — both paths put something
+in front, so every request's peer address is that thing rather than
+TradingView.
+
+### Check it before touching TradingView
+
+```bash
+python scripts/domain_check.py --host hooks.neofl.site --slug tradingview
+```
+
+Six read-only checks, in the order the request travels: DNS (and whether
+it is the machine you meant), port 80, port 443, the certificate,
+`/health`, and `/hook/<slug>`.
+
+The certificate check is the one that earns the script. **TradingView
+refuses a self-signed or mismatched certificate outright and tells you
+nothing** — the URL works perfectly in your browser once you click
+through the warning, and the webhook will never arrive. It also reports
+days-to-expiry, because a relay whose certificate quietly expires is a
+strategy that stops trading on a Tuesday for a reason nobody looks for.
+
+Each failure names the layer, since they look alike from TradingView's
+side: DNS pointing at the old host answers 404, a closed 443 answers
+nothing, a live proxy over a dead gateway answers 502, and a wrong slug
+answers 404 as well.
+
 ### Getting a host
 
 | | Use when | Cost |

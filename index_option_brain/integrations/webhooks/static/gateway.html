@@ -227,7 +227,7 @@ footer code{font-family:"IBM Plex Mono",monospace}
           </label>
           <label class="field">
             <span>Base URL <span class="hint">(the public https address, port 443)</span></span>
-            <input type="text" id="bBase" value="https://hooks.example.com" spellcheck="false">
+            <input type="text" id="bBase" value="https://hooks.neofl.site" spellcheck="false">
             <span class="hint">Not the port you opened this page on. TradingView calls 80 and 443 only, so this is the proxy or tunnel in front.</span>
           </label>
           <div class="row">
@@ -557,7 +557,7 @@ function currentConfig(){
   }
   var b = state.built;
   return {
-    base: $('bBase').value || 'https://hooks.example.com',
+    base: $('bBase').value || 'https://hooks.neofl.site',
     slug: $('bSlug').value || 'my-hook',
     read: b ? b.read_token : 'YOUR_READ_TOKEN',
     ingest: b ? b.ingest_secret : 'YOUR_INGEST_SECRET'
@@ -923,7 +923,7 @@ async function boot(){
     state.base = location.origin;
     // Prefilled, not locked. If this page was opened on the gateway's own
     // port, that port is exactly the one TradingView cannot call.
-    if(!$('bBase').value || $('bBase').value.indexOf('example.com') >= 0)
+    if(!$('bBase').value || $('bBase').value.indexOf('neofl.site') >= 0)
       $('bBase').value = location.origin;
     $('modeBadge').className = 'mode live';
     $('modeText').textContent = health.endpoints + ' endpoint' + (health.endpoints === 1 ? '' : 's') + ' live';

@@ -722,10 +722,17 @@ default, and it has not been run against a broker — demo first.
 [docs/testing.md](docs/testing.md) — the bisect table, and two scripts:
 
 ```bash
-python scripts/mock_broker.py                    # a broker that logs, places nothing
-python scripts/hook_test.py --base <url> ...     # 22 payloads at a running gateway
-python scripts/hook_soak.py                      # restarts, races, broker failures
+python scripts/domain_check.py --host hooks.neofl.site   # DNS, 443, cert, /health
+python scripts/mock_broker.py                            # a broker that logs, places nothing
+python scripts/hook_test.py --base <url> ...             # 22 payloads at a running gateway
+python scripts/hook_soak.py                              # restarts, races, broker failures
 ```
+
+`domain_check.py` runs first, because TradingView's alert log says only
+that a delivery failed. Its certificate check is the one that earns it:
+**TradingView refuses a self-signed or mismatched certificate outright and
+tells you nothing**, while the same URL works in a browser the moment you
+click through the warning.
 
 Worth saying why they exist: **the unit suite did not catch any of the
 three real bugs in the webhook path.** A live run of `hook_test.py`

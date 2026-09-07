@@ -24,7 +24,7 @@
 #
 #   cloudflared tunnel login
 #   cloudflared tunnel create index-brain
-#   cloudflared tunnel route dns index-brain hooks.yourdomain.com
+#   cloudflared tunnel route dns index-brain hooks.neofl.site
 #   sudo cp deploy/cloudflared-config.yml /etc/cloudflared/config.yml
 #   # edit the two IDs below to match `cloudflared tunnel list`
 #   sudo cloudflared service install
@@ -52,7 +52,7 @@ ingress:
   # The webhook path only. Publishing the whole gateway through the tunnel
   # would put the read API and the operator page on the public internet
   # behind nothing but a token that gets pasted into browsers and EAs.
-  - hostname: hooks.yourdomain.com
+  - hostname: hooks.neofl.site
     path: /hook/*
     service: http://127.0.0.1:8788
 

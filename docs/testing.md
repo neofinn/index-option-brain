@@ -57,6 +57,22 @@ Header values are redacted in its output. It is meant to be left running
 in a terminal, and a terminal is a place credentials get screenshotted out
 of.
 
+### `scripts/domain_check.py` — before TradingView ever sees the URL
+
+```bash
+python scripts/domain_check.py \
+    --host hooks.neofl.site --expect-ip 151.243.146.9 --slug tradingview
+```
+
+DNS, port 80, port 443, the certificate, `/health`, `/hook/<slug>` — in
+the order the request travels, each failure naming its own layer.
+
+Run it first, because TradingView's alert log says only that the delivery
+failed. The certificate check is the one to care about: TradingView
+refuses a self-signed or mismatched certificate and reports nothing, while
+the same URL works in your browser the moment you click through the
+warning.
+
 ### `scripts/hook_soak.py` — state, restarts and races
 
 ```bash

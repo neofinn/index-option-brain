@@ -14,12 +14,24 @@
 # certificate itself. A relay whose certificate silently expires is a
 # strategy that stops trading on a Tuesday for a reason nobody looks for.
 #
-# REQUIRES a domain whose A record points at this machine, and ports 80
-# and 443 reachable. If you have neither, use the Cloudflare Tunnel path
-# in deploy/cloudflared-config.yml instead — it needs no open port and no
-# DNS you control.
+# REQUIRES, before this file does anything:
+#
+#   1. An A record  hooks.neofl.site -> 151.243.146.9
+#      The apex neofl.site already points somewhere else, so use the
+#      subdomain rather than the apex — the webhook endpoint then has its
+#      own name and its own certificate, and whatever the apex serves is
+#      untouched.
+#
+#   2. Ports 80 and 443 reachable from the internet. 80 is not optional:
+#      Caddy uses it for the ACME HTTP-01 challenge, and TradingView will
+#      only ever call 80 or 443 anyway.
+#
+#   3. `python scripts/domain_check.py --host hooks.neofl.site` passing.
+#
+# If you cannot open ports, use deploy/cloudflared-config.yml instead —
+# the tunnel dials out, so nothing has to be reachable inbound.
 
-hooks.example.com {
+hooks.neofl.site {
 	# The webhook path. This is the URL you paste into TradingView.
 	handle /hook/* {
 		reverse_proxy 127.0.0.1:8788
