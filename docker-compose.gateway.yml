@@ -1,0 +1,48 @@
+# The webhook-to-API gateway, as an overlay on docker-compose.yml.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.gateway.yml up -d
+#
+# Publishes on a public interface, because senders are the ones calling.
+# That is the reason it is a separate container from `brain`: the brain
+# holds broker credentials and is bound to loopback behind Tailscale, and
+# nothing about it should change to accommodate inbound webhooks.
+#
+# Put TLS in front of it. Senders that cannot set a header (TradingView)
+# put their secret in the request body, so plain http means the credential
+# crosses the internet in clear text.
+
+services:
+  gateway:
+    build: .
+    image: index-option-brain:local
+    container_name: index-brain-gw
+    restart: unless-stopped
+    command: ["python", "-m", "index_option_brain.integrations.webhooks"]
+    ports:
+      - "8788:8788"
+    env_file:
+      - .env
+    environment:
+      WEBHOOK_ENDPOINTS_FILE: /app/var/webhook-endpoints.json
+      WEBHOOK_GATEWAY_PORT: ${WEBHOOK_GATEWAY_PORT:-8788}
+      BAR_STORE_DIR: ""
+    read_only: true
+    tmpfs:
+      - /tmp
+    volumes:
+      # The database and the endpoint registry. Shared with the brain
+      # container: on SQLite the two writers are serialised by a file
+      # lock, which is why Database sets a busy timeout.
+      - ./var:/app/var
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8788/health').read()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"

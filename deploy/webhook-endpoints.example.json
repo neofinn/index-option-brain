@@ -1,0 +1,33 @@
+{
+  "_comment": [
+    "Copy to var/webhook-endpoints.json and chmod 600 — the gateway",
+    "refuses to start on a registry anyone else can read.",
+    "",
+    "Two credentials per endpoint, and they must differ. The pusher's",
+    "ingest_secret ends up somewhere exposed (a TradingView indicator",
+    "input every viewer of a shared chart can read); the puller's",
+    "read_token lives in your terminal. One credential for both would",
+    "mean anyone who sees your chart reads every delivery.",
+    "",
+    "Generate them with:  openssl rand -hex 24",
+    "",
+    "Values support ${ENV_VAR} expansion, so this file can be committed",
+    "while the secrets stay in the environment. Delete this _comment key",
+    "before use — it is not a valid endpoint."
+  ],
+  "tradingview": {
+    "kind": "tradingview",
+    "description": "NIFTY chart alerts from the Index Brain indicator",
+    "ingest_secret": "${TV_INGEST_SECRET}",
+    "read_token": "${TV_READ_TOKEN}",
+    "retain": 500,
+    "allowed_ips": "52.89.214.238,34.212.75.30,54.218.53.128,52.32.178.7"
+  },
+  "broker-callback": {
+    "kind": "raw",
+    "description": "Order status callbacks — stored verbatim, validated not at all",
+    "ingest_secret": "${BROKER_INGEST_SECRET}",
+    "read_token": "${BROKER_READ_TOKEN}",
+    "retain": 2000
+  }
+}

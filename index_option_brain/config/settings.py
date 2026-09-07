@@ -64,6 +64,22 @@ class Settings(BaseSettings):
     a week of uptime. Empty disables persistence.
     """
 
+    webhook_endpoints_file: str = Field(
+        default="var/webhook-endpoints.json", alias="WEBHOOK_ENDPOINTS_FILE"
+    )
+    """The gateway's endpoint registry: slugs, their two credentials, and
+    what each one does.
+
+    A file rather than a database table, and edited on the machine rather
+    than from the web page. Adding public ingress to a running system is an
+    operator action — a page that mints new POST endpoints on demand is a
+    page that can be used to mint them by whoever reaches it.
+    """
+    webhook_gateway_port: int = Field(default=8788, alias="WEBHOOK_GATEWAY_PORT")
+    """The gateway's own port, separate from the console's and the
+    TradingView receiver's. All three have different exposure: the console
+    is tailnet-only, the other two answer the public internet."""
+
     tradingview_webhook_secret: str = Field(default="", alias="TRADINGVIEW_WEBHOOK_SECRET")
     """The shared secret a TradingView alert must carry. Empty disables the
     receiver entirely.

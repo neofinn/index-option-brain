@@ -281,7 +281,7 @@ index_option_brain/
 ├── memory/          Postgres repository + Redis cache (interfaces)
 ├── feedback/        Feedback + learning engines (interfaces)
 ├── backtest/         Backtest/replay engine (interface)
-├── integrations/    TradingView: webhook receiver, guard, Pine mirror
+├── integrations/    TradingView receiver + Pine mirror; webhook-to-API gateway
 ├── database/        SQLAlchemy base + UUID/timestamp/version mixin
 ├── monitoring/       Observability metric names + sink protocol
 └── tests/
@@ -616,6 +616,49 @@ It refuses to start without a secret. TradingView cannot sign a webhook,
 so the shared secret in the body is the only credential the request
 carries; it is compared in constant time, stripped before parsing, and has
 no field on any model that could hold it.
+
+## Webhook to API
+
+Full write-up in [docs/webhook-to-api.md](docs/webhook-to-api.md).
+
+Some services only ever POST at you — TradingView alerts, broker
+callbacks, a CI hook. Some consumers only ever poll — a cron job, a Google
+Sheet, a script behind NAT, a phone. The gateway sits between them: it
+accepts the POST, authenticates it, stores it, and serves it back over a
+cursor-paged REST API.
+
+```bash
+python -m index_option_brain.integrations.webhooks   # :8788, page at /
+```
+
+```
+POST /hook/<slug>          the sender's URL      ingest_secret
+GET  /v1/<slug>?since=N    the consumer's URL    read_token
+GET  /v1/<slug>/payload    newest payload alone, for curl | jq
+```
+
+Three things worth knowing about the design:
+
+**Two credentials per endpoint, and the registry refuses them if they
+match.** The pusher's secret ends up in a TradingView indicator input that
+every viewer of a shared chart can read; the puller's token lives in your
+terminal. One credential for both would mean anyone who sees your chart
+reads every delivery. And a read token grants only its own endpoint —
+there is no admin token, so one leak costs one endpoint.
+
+**The cursor is an integer, not a timestamp.** `seq` is monotonic, so
+`since` is an exact `>` and a poller never skips or repeats. The timestamp
+version was tried here first and had to be made inclusive to stop two
+deliveries in the same second from losing one permanently.
+
+**Body credentials are stripped before storage.** TradingView has nowhere
+but the body to put its secret; persisting it would serve the weaker
+credential back over the read API as the stronger one. Whole field names
+only, recursively — `secret_santa_id` is content.
+
+The gateway holds no broker credentials and cannot reach an order path; an
+import-graph test fails the build if that changes. A delivery becomes a
+decision only when the engine polls this API like any other consumer.
 
 ## Source spec
 

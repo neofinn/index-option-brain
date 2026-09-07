@@ -1,0 +1,747 @@
+<title>Webhook to API</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,500&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+:root{
+  --ground:#eef1f3; --surface:#ffffff; --surface-2:#e6ebee; --surface-3:#dde4e8;
+  --ink:#14181b; --ink-2:#4c585d; --ink-3:#717f85; --rule:#d2d9dd;
+  --accent:#0b6b63; --accent-ink:#ffffff; --accent-soft:#dcebe9;
+  --ok:#1a8c7f; --warn:#a86a12; --bad:#c8443b;
+  --code-bg:#101619; --code-ink:#c9d3d7; --code-rule:#222d32; --code-dim:#5a6b72;
+  --tok-key:#7fc4e8; --tok-str:#9ecfa0; --tok-num:#e0b878;
+  --shadow:0 1px 2px rgba(20,24,27,.06), 0 8px 24px -14px rgba(20,24,27,.2);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --ground:#0d1214; --surface:#141b1e; --surface-2:#1a2327; --surface-3:#212c31;
+    --ink:#e4eaec; --ink-2:#95a3a8; --ink-3:#6e7c82; --rule:#263135;
+    --accent:#4fd6c4; --accent-ink:#06211f; --accent-soft:#14312e;
+    --ok:#3fbfaa; --warn:#d6a04a; --bad:#e8695e;
+    --code-bg:#080c0e; --code-rule:#1b2529;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px -16px rgba(0,0,0,.7);
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#0d1214; --surface:#141b1e; --surface-2:#1a2327; --surface-3:#212c31;
+  --ink:#e4eaec; --ink-2:#95a3a8; --ink-3:#6e7c82; --rule:#263135;
+  --accent:#4fd6c4; --accent-ink:#06211f; --accent-soft:#14312e;
+  --ok:#3fbfaa; --warn:#d6a04a; --bad:#e8695e;
+  --code-bg:#080c0e; --code-rule:#1b2529;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px -16px rgba(0,0,0,.7);
+}
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--ground); color:var(--ink);
+  font-family:"IBM Plex Sans",system-ui,-apple-system,sans-serif; font-size:14.5px; line-height:1.55;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1180px; margin:0 auto; padding:28px 22px 72px; display:flex; flex-direction:column; gap:26px}
+
+header.top{display:flex; flex-wrap:wrap; align-items:flex-end; gap:16px 24px}
+.brand{display:flex; flex-direction:column; gap:4px}
+.eyebrow{font-family:"IBM Plex Mono",monospace; font-size:10.5px; letter-spacing:.16em; text-transform:uppercase; color:var(--accent); margin:0}
+h1{font-family:"Newsreader",Georgia,serif; font-optical-sizing:auto; font-weight:500; font-size:clamp(26px,4vw,36px); line-height:1.05; letter-spacing:-.015em; margin:0}
+.flow{
+  margin-left:auto; display:flex; align-items:center; gap:10px;
+  font-family:"IBM Plex Mono",monospace; font-size:11.5px; color:var(--ink-2);
+  background:var(--surface); border:1px solid var(--rule); border-radius:3px; padding:9px 14px;
+}
+.flow b{color:var(--ink); font-weight:500}
+.flow .arrow{color:var(--accent)}
+.mode{
+  display:inline-flex; align-items:center; gap:7px; font-family:"IBM Plex Mono",monospace;
+  font-size:10.5px; letter-spacing:.09em; text-transform:uppercase; padding:5px 10px; border-radius:2px;
+}
+.mode.live{background:var(--accent-soft); color:var(--accent)}
+.mode.builder{background:var(--surface-2); color:var(--ink-2)}
+.dot{width:6px; height:6px; border-radius:50%; background:currentColor}
+
+.cols{display:grid; gap:20px; grid-template-columns:minmax(0,340px) minmax(0,1fr)}
+@media (max-width:960px){ .cols{grid-template-columns:minmax(0,1fr)} }
+
+.card{background:var(--surface); border:1px solid var(--rule); border-radius:4px; box-shadow:var(--shadow)}
+.card > h2{
+  margin:0; padding:13px 16px; border-bottom:1px solid var(--rule);
+  font-family:"IBM Plex Mono",monospace; font-size:11px; font-weight:600;
+  letter-spacing:.1em; text-transform:uppercase; color:var(--ink-2);
+  display:flex; align-items:center; gap:10px;
+}
+.card > h2 .right{margin-left:auto; font-weight:400; text-transform:none; letter-spacing:0; color:var(--ink-3)}
+.card .body{padding:16px; display:flex; flex-direction:column; gap:14px}
+
+label.field{display:flex; flex-direction:column; gap:5px; font-size:12px; color:var(--ink-2)}
+label.field span.hint{color:var(--ink-3); font-size:11.5px}
+input[type=text], input[type=password], select, textarea{
+  font-family:"IBM Plex Mono",monospace; font-size:12.5px; color:var(--ink);
+  background:var(--surface-2); border:1px solid var(--rule); border-radius:3px; padding:9px 11px; width:100%;
+}
+textarea{min-height:110px; resize:vertical; line-height:1.5}
+input:focus-visible, select:focus-visible, textarea:focus-visible{outline:2px solid var(--accent); outline-offset:-1px}
+select{font-family:"IBM Plex Sans",sans-serif}
+
+button{
+  font:600 12.5px/1 "IBM Plex Sans",sans-serif; cursor:pointer; border-radius:3px;
+  padding:9px 14px; border:1px solid var(--rule); background:var(--surface-2); color:var(--ink);
+}
+button:hover{border-color:var(--ink-3)}
+button:focus-visible{outline:2px solid var(--accent); outline-offset:1px}
+button.primary{background:var(--accent); color:var(--accent-ink); border-color:transparent}
+button.primary:hover{filter:brightness(1.08)}
+button.tiny{padding:5px 9px; font-size:11px; font-family:"IBM Plex Mono",monospace; letter-spacing:.04em}
+.row{display:flex; gap:8px; flex-wrap:wrap; align-items:center}
+
+/* endpoint list */
+ul.eps{list-style:none; margin:0; padding:0; display:flex; flex-direction:column}
+ul.eps li{border-top:1px solid var(--rule)}
+ul.eps li:first-child{border-top:none}
+ul.eps button.ep{
+  width:100%; text-align:left; background:transparent; border:none; border-radius:0;
+  padding:12px 16px; display:grid; grid-template-columns:1fr auto; gap:4px 10px; align-items:center;
+}
+ul.eps button.ep:hover{background:var(--surface-2)}
+ul.eps button.ep[aria-current=true]{background:var(--accent-soft); box-shadow:inset 2px 0 0 var(--accent)}
+.ep .slug{font-family:"IBM Plex Mono",monospace; font-size:13px; font-weight:500; color:var(--ink)}
+.ep .sub{grid-column:1/-1; font-size:11.5px; color:var(--ink-3); font-variant-numeric:tabular-nums}
+.chip{
+  font-family:"IBM Plex Mono",monospace; font-size:10px; letter-spacing:.06em; text-transform:uppercase;
+  padding:3px 7px; border-radius:2px; background:var(--surface-3); color:var(--ink-2); white-space:nowrap;
+}
+.chip.ok{background:color-mix(in srgb, var(--ok) 18%, transparent); color:var(--ok)}
+.chip.warn{background:color-mix(in srgb, var(--warn) 18%, transparent); color:var(--warn)}
+.chip.bad{background:color-mix(in srgb, var(--bad) 18%, transparent); color:var(--bad)}
+
+/* url + snippet blocks */
+.kv{display:flex; flex-direction:column; gap:9px}
+.urlline{display:grid; grid-template-columns:78px minmax(0,1fr) auto; gap:10px; align-items:center}
+.urlline .tag{font-family:"IBM Plex Mono",monospace; font-size:10px; letter-spacing:.08em; text-transform:uppercase; color:var(--ink-3)}
+.urlline code{
+  font-family:"IBM Plex Mono",monospace; font-size:12px; background:var(--surface-2);
+  border:1px solid var(--rule); border-radius:3px; padding:7px 10px; overflow-x:auto; white-space:nowrap; display:block;
+}
+.urlline .push{background:color-mix(in srgb, var(--warn) 12%, var(--surface-2))}
+.urlline .pull{background:color-mix(in srgb, var(--ok) 12%, var(--surface-2))}
+
+.tabs{display:flex; gap:2px; border-bottom:1px solid var(--rule); padding:0 16px; flex-wrap:wrap}
+.tabs button{
+  border:none; background:transparent; border-radius:0; padding:10px 12px; color:var(--ink-3);
+  font-family:"IBM Plex Mono",monospace; font-size:11px; letter-spacing:.07em; text-transform:uppercase;
+  border-bottom:2px solid transparent; margin-bottom:-1px;
+}
+.tabs button[aria-selected=true]{color:var(--accent); border-bottom-color:var(--accent)}
+pre.snip{
+  margin:0; background:var(--code-bg); color:var(--code-ink); border-radius:0 0 4px 4px;
+  font-family:"IBM Plex Mono",monospace; font-size:12px; line-height:1.62;
+  padding:14px 16px; overflow-x:auto; white-space:pre;
+}
+pre.snip .k{color:var(--tok-key)} pre.snip .s{color:var(--tok-str)} pre.snip .c{color:var(--code-dim); font-style:italic} pre.snip .n{color:var(--tok-num)}
+
+/* deliveries */
+.feed{display:flex; flex-direction:column; max-height:520px; overflow-y:auto}
+.feed .empty{padding:34px 18px; text-align:center; color:var(--ink-3); font-size:13px}
+.dlv{border-top:1px solid var(--rule); padding:12px 16px; display:flex; flex-direction:column; gap:8px}
+.dlv:first-child{border-top:none}
+.dlv .head{display:flex; gap:10px; align-items:baseline; flex-wrap:wrap; font-family:"IBM Plex Mono",monospace; font-size:11.5px; color:var(--ink-3); font-variant-numeric:tabular-nums}
+.dlv .head .seq{color:var(--accent); font-weight:600}
+.dlv .head .when{color:var(--ink-2)}
+.dlv pre{
+  margin:0; background:var(--code-bg); color:var(--code-ink); border-radius:3px; padding:10px 12px;
+  font-family:"IBM Plex Mono",monospace; font-size:11.5px; line-height:1.55; overflow-x:auto; white-space:pre;
+}
+.paths{display:flex; flex-wrap:wrap; gap:5px}
+.paths button{
+  font-family:"IBM Plex Mono",monospace; font-size:10.5px; padding:3px 8px; border-radius:2px;
+  background:var(--surface-2); color:var(--ink-2); border:1px solid var(--rule); font-weight:400;
+}
+.paths button:hover{color:var(--accent); border-color:var(--accent)}
+
+.note{font-size:12.5px; color:var(--ink-2); margin:0}
+.note b{color:var(--ink); font-weight:500}
+.warnbox{
+  border-left:2px solid var(--warn); background:color-mix(in srgb, var(--warn) 7%, transparent);
+  padding:10px 14px; font-size:12.5px; color:var(--ink-2); border-radius:0 3px 3px 0;
+}
+.warnbox b{color:var(--ink)}
+footer{border-top:1px solid var(--rule); padding-top:16px; color:var(--ink-3); font-size:12px; display:flex; gap:8px 22px; flex-wrap:wrap}
+footer code{font-family:"IBM Plex Mono",monospace}
+.toast{
+  position:fixed; left:50%; bottom:24px; transform:translateX(-50%) translateY(8px);
+  background:var(--ink); color:var(--ground); padding:10px 18px; border-radius:3px; font-size:13px; font-weight:500;
+  opacity:0; pointer-events:none; transition:opacity .18s ease, transform .18s ease; z-index:50;
+}
+.toast.show{opacity:1; transform:translateX(-50%) translateY(0)}
+[hidden]{display:none !important}
+@media (prefers-reduced-motion:reduce){ *{transition:none !important} }
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <div class="brand">
+      <p class="eyebrow">Push&#8209;to&#8209;pull bridge</p>
+      <h1>Webhook to API</h1>
+    </div>
+    <div class="flow">
+      <b>POST</b> in <span class="arrow">&rarr;</span> stored <span class="arrow">&rarr;</span> <b>GET</b> out
+      <span class="mode builder" id="modeBadge"><span class="dot"></span><span id="modeText">builder</span></span>
+    </div>
+  </header>
+
+  <div class="cols">
+    <!-- ================= left column ================= -->
+    <div style="display:flex; flex-direction:column; gap:20px">
+
+      <section class="card" id="liveAuth" hidden>
+        <h2>Read token</h2>
+        <div class="body">
+          <label class="field">
+            <span>Paste an endpoint's <b>read_token</b></span>
+            <input type="password" id="tokenInput" autocomplete="off" spellcheck="false" placeholder="read token">
+            <span class="hint">A token grants only the endpoints it belongs to. There is no token that reads everything.</span>
+          </label>
+          <div class="row">
+            <button class="primary" id="connectBtn" type="button">Connect</button>
+            <button id="forgetBtn" type="button">Forget</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="card" id="epCard" hidden>
+        <h2>Endpoints <span class="right" id="epCount"></span></h2>
+        <ul class="eps" id="epList"></ul>
+      </section>
+
+      <section class="card" id="builderCard">
+        <h2>Define an endpoint</h2>
+        <div class="body">
+          <p class="note">Endpoints are declared in a file on the machine, not created from this page &mdash; adding public ingress to a running system is an operator action. This builds the entry to paste in.</p>
+          <label class="field">
+            <span>Slug <span class="hint">(appears in the public URL)</span></span>
+            <input type="text" id="bSlug" value="tradingview" spellcheck="false">
+          </label>
+          <label class="field">
+            <span>Kind</span>
+            <select id="bKind">
+              <option value="raw">raw &mdash; store and serve back</option>
+              <option value="tradingview" selected>tradingview &mdash; also validate as an alert</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Base URL <span class="hint">(where this gateway answers)</span></span>
+            <input type="text" id="bBase" value="https://hooks.example.com" spellcheck="false">
+          </label>
+          <div class="row">
+            <button class="primary" id="genBtn" type="button">Generate credentials</button>
+            <button class="tiny" id="copyRegistry" type="button">Copy JSON</button>
+          </div>
+          <div class="warnbox">
+            <b>Two credentials, never one.</b> The pusher's secret lives in a TradingView indicator input that every viewer of a shared chart can read. The puller's token lives in your terminal. Sharing one would let anyone who sees your chart read every delivery.
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- ================= right column ================= -->
+    <div style="display:flex; flex-direction:column; gap:20px">
+
+      <section class="card" id="urlCard">
+        <h2>URLs <span class="right" id="urlFor"></span></h2>
+        <div class="body kv" id="urlBlock"></div>
+      </section>
+
+      <section class="card">
+        <h2>Client code <span class="right">poll from anything that can GET</span></h2>
+        <div class="tabs" id="snipTabs" role="tablist"></div>
+        <pre class="snip" id="snip"></pre>
+      </section>
+
+      <section class="card" id="feedCard" hidden>
+        <h2>Deliveries <span class="right" id="feedMeta"></span></h2>
+        <div class="feed" id="feed"></div>
+      </section>
+
+      <section class="card" id="inspectCard">
+        <h2>Payload inspector <span class="right">paste a sample, get the field paths</span></h2>
+        <div class="body">
+          <textarea id="sample" spellcheck="false">{"ticker":"NIFTY","kind":"BREAKOUT","price":"24025.65","level":"24000.00","bar_time":"2026-09-07T04:10:00Z"}</textarea>
+          <div class="paths" id="paths"></div>
+          <p class="note" id="inspectNote"></p>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <footer>
+    <span>Cursor is an integer, so <code>since</code> is exact &mdash; a poller never skips or repeats.</span>
+    <span>Credential-looking body fields are stripped before storage.</span>
+    <span>Body cap <code>64 KB</code></span>
+    <span>Rate <code>120/min</code> per endpoint</span>
+  </footer>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+(function(){
+'use strict';
+
+var $ = function(id){ return document.getElementById(id); };
+var state = {
+  live: false, token: '', endpoints: [], selected: null,
+  cursor: 0, deliveries: [], lang: 'curl', base: '', poller: null,
+  built: null
+};
+
+/* ---------- small helpers ---------- */
+var toast = $('toast'), toastTimer;
+function flash(msg){
+  toast.textContent = msg; toast.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(function(){ toast.classList.remove('show'); }, 2200);
+}
+function copy(text, what){
+  var done = function(){ flash((what || 'Copied') + ' — copied'); };
+  var fallback = function(){
+    var ta = document.createElement('textarea');
+    ta.value = text; ta.style.cssText = 'position:fixed;top:-9999px';
+    document.body.appendChild(ta); ta.select();
+    var ok = false; try { ok = document.execCommand('copy'); } catch(e){}
+    document.body.removeChild(ta);
+    ok ? done() : flash('Copy blocked — select the text and press Ctrl/Cmd + C');
+  };
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text).then(done, fallback);
+  } else { fallback(); }
+}
+function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function randomToken(bytes){
+  var a = new Uint8Array(bytes || 24);
+  (window.crypto || window.msCrypto).getRandomValues(a);
+  return Array.prototype.map.call(a, function(b){ return ('0'+b.toString(16)).slice(-2); }).join('');
+}
+function ago(seconds){
+  if(seconds == null) return 'never';
+  if(seconds < 60) return seconds + 's ago';
+  if(seconds < 3600) return Math.round(seconds/60) + 'm ago';
+  if(seconds < 86400) return Math.round(seconds/3600) + 'h ago';
+  return Math.round(seconds/86400) + 'd ago';
+}
+/* Freshness is the reading that matters: a sender that has stopped calling
+   looks exactly like a quiet one until you can see how long it has been
+   quiet. Never-called is its own state, not a stale one. */
+function freshness(seconds, count){
+  if(count === 0) return {cls:'', text:'no deliveries'};
+  if(seconds == null) return {cls:'', text:'unknown'};
+  if(seconds < 900) return {cls:'ok', text:ago(seconds)};
+  if(seconds < 86400) return {cls:'warn', text:ago(seconds)};
+  return {cls:'bad', text:ago(seconds)};
+}
+
+/* ---------- JSON pretty printer with light highlighting ---------- */
+function paintJson(value){
+  var text = JSON.stringify(value, null, 2);
+  if(text === undefined) return '';
+  return esc(text)
+    .replace(/&quot;([^&]*?)&quot;(\s*:)/g, '<span class="k">"$1"</span>$2')
+    .replace(/:\s&quot;(.*?)&quot;/g, ': <span class="s">"$1"</span>')
+    .replace(/:\s(-?\d+\.?\d*)/g, ': <span class="n">$1</span>');
+}
+
+/* ---------- snippet generation ---------- */
+var LANGS = ['curl', 'python', 'node', 'sheets', 'tradingview'];
+
+function snippetFor(lang, cfg){
+  var base = cfg.base.replace(/\/+$/, '');
+  var slug = cfg.slug || 'my-hook';
+  var read = cfg.read || '<READ_TOKEN>';
+  var ingest = cfg.ingest || '<INGEST_SECRET>';
+  if(lang === 'curl'){
+    return [
+      '<span class="c"># the newest payload alone, for a shell prompt</span>',
+      'curl -s -H <span class="s">"Authorization: Bearer ' + read + '"</span> \\',
+      '  <span class="s">"' + base + '/v1/' + slug + '/payload"</span> | jq .',
+      '',
+      '<span class="c"># everything since cursor 41; store next_cursor and pass it back</span>',
+      'curl -s -H <span class="s">"Authorization: Bearer ' + read + '"</span> \\',
+      '  <span class="s">"' + base + '/v1/' + slug + '?since=41&amp;limit=50"</span> | jq .',
+      '',
+      '<span class="c"># send a test delivery as the pusher would</span>',
+      'curl -s -X POST <span class="s">"' + base + '/hook/' + slug + '"</span> \\',
+      '  -H <span class="s">"X-Webhook-Secret: ' + ingest + '"</span> \\',
+      '  -H <span class="s">"Content-Type: application/json"</span> \\',
+      '  -d <span class="s">\'{"hello":"world"}\'</span>'
+    ].join('\n');
+  }
+  if(lang === 'python'){
+    return [
+      '<span class="c"># A cursor-polling consumer. The cursor is an integer, so</span>',
+      '<span class="c"># `since` is exact: this loop never skips or repeats one.</span>',
+      '<span class="k">import</span> time, requests',
+      '',
+      'BASE  = <span class="s">"' + base + '"</span>',
+      'SLUG  = <span class="s">"' + slug + '"</span>',
+      'TOKEN = <span class="s">"' + read + '"</span>',
+      '',
+      'cursor = <span class="n">0</span>',
+      '<span class="k">while</span> <span class="k">True</span>:',
+      '    r = requests.get(',
+      '        <span class="s">f"{BASE}/v1/{SLUG}"</span>,',
+      '        params={<span class="s">"since"</span>: cursor, <span class="s">"limit"</span>: <span class="n">50</span>},',
+      '        headers={<span class="s">"Authorization"</span>: <span class="s">f"Bearer {TOKEN}"</span>},',
+      '        timeout=<span class="n">10</span>,',
+      '    )',
+      '    r.raise_for_status()',
+      '    body = r.json()',
+      '    <span class="k">for</span> d <span class="k">in</span> body[<span class="s">"deliveries"</span>]:',
+      '        print(d[<span class="s">"seq"</span>], d[<span class="s">"received_at"</span>], d[<span class="s">"payload"</span>])',
+      '    <span class="c"># echoed back even on an empty page, so this is</span>',
+      '    <span class="c"># unconditional and the cursor cannot rewind</span>',
+      '    cursor = body[<span class="s">"next_cursor"</span>]',
+      '    time.sleep(<span class="n">5</span>)'
+    ].join('\n');
+  }
+  if(lang === 'node'){
+    return [
+      '<span class="c">// Node 18+: fetch is built in, no dependency needed.</span>',
+      '<span class="k">const</span> BASE = <span class="s">"' + base + '"</span>, SLUG = <span class="s">"' + slug + '"</span>, TOKEN = <span class="s">"' + read + '"</span>;',
+      '<span class="k">let</span> cursor = <span class="n">0</span>;',
+      '',
+      '<span class="k">async function</span> poll() {',
+      '  <span class="k">const</span> r = <span class="k">await</span> fetch(',
+      '    <span class="s">`${BASE}/v1/${SLUG}?since=${cursor}&amp;limit=50`</span>,',
+      '    { headers: { Authorization: <span class="s">`Bearer ${TOKEN}`</span> } }',
+      '  );',
+      '  <span class="k">if</span> (!r.ok) <span class="k">throw new</span> Error(<span class="s">`gateway ${r.status}`</span>);',
+      '  <span class="k">const</span> body = <span class="k">await</span> r.json();',
+      '  <span class="k">for</span> (<span class="k">const</span> d <span class="k">of</span> body.deliveries) console.log(d.seq, d.payload);',
+      '  cursor = body.next_cursor;',
+      '}',
+      '',
+      'setInterval(poll, <span class="n">5000</span>);'
+    ].join('\n');
+  }
+  if(lang === 'sheets'){
+    return [
+      '<span class="c">// Google Sheets: Extensions &rarr; Apps Script. A spreadsheet</span>',
+      '<span class="c">// cannot receive a webhook, which is the whole point of this.</span>',
+      '<span class="k">function</span> pullDeliveries() {',
+      '  <span class="k">const</span> props = PropertiesService.getScriptProperties();',
+      '  <span class="k">const</span> cursor = Number(props.getProperty(<span class="s">"cursor"</span>) || <span class="n">0</span>);',
+      '  <span class="k">const</span> res = UrlFetchApp.fetch(',
+      '    <span class="s">"' + base + '/v1/' + slug + '?since="</span> + cursor,',
+      '    { headers: { Authorization: <span class="s">"Bearer ' + read + '"</span> } }',
+      '  );',
+      '  <span class="k">const</span> body = JSON.parse(res.getContentText());',
+      '  <span class="k">const</span> sheet = SpreadsheetApp.getActiveSheet();',
+      '  body.deliveries.forEach(<span class="k">function</span> (d) {',
+      '    sheet.appendRow([d.seq, d.received_at, JSON.stringify(d.payload)]);',
+      '  });',
+      '  props.setProperty(<span class="s">"cursor"</span>, String(body.next_cursor));',
+      '}',
+      '',
+      '<span class="c">// Then: Triggers &rarr; pullDeliveries &rarr; every 5 minutes.</span>'
+    ].join('\n');
+  }
+  return [
+    '<span class="c">// TradingView cannot set a header, so its secret goes in</span>',
+    '<span class="c">// the body. The gateway strips it before storing, so it is</span>',
+    '<span class="c">// never served back over the read API.</span>',
+    '<span class="c">// Alert &rarr; Webhook URL:</span>',
+    '<span class="s">' + base + '/hook/' + slug + '</span>',
+    '',
+    '<span class="c">// Alert &rarr; Message (or let the Pine indicator build it):</span>',
+    '{',
+    '  <span class="k">"secret"</span>: <span class="s">"' + ingest + '"</span>,',
+    '  <span class="k">"kind"</span>: <span class="s">"BREAKOUT"</span>,',
+    '  <span class="k">"ticker"</span>: <span class="s">"{{ticker}}"</span>,',
+    '  <span class="k">"interval"</span>: <span class="s">"{{interval}}"</span>,',
+    '  <span class="k">"price"</span>: <span class="s">"{{close}}"</span>,',
+    '  <span class="k">"bar_time"</span>: <span class="s">"{{time}}"</span>,',
+    '  <span class="k">"fired_at"</span>: <span class="s">"{{timenow}}"</span>',
+    '}'
+  ].join('\n');
+}
+
+function currentConfig(){
+  if(state.live && state.selected){
+    return {base: state.base, slug: state.selected.slug, read: state.token, ingest: '<INGEST_SECRET>'};
+  }
+  var b = state.built;
+  return {
+    base: $('bBase').value || 'https://hooks.example.com',
+    slug: $('bSlug').value || 'my-hook',
+    read: b ? b.read_token : '<READ_TOKEN>',
+    ingest: b ? b.ingest_secret : '<INGEST_SECRET>'
+  };
+}
+
+function renderSnippet(){
+  var cfg = currentConfig();
+  $('snip').innerHTML = snippetFor(state.lang, cfg);
+}
+
+function renderTabs(){
+  var host = $('snipTabs');
+  host.innerHTML = '';
+  LANGS.forEach(function(lang){
+    var b = document.createElement('button');
+    b.type = 'button'; b.setAttribute('role','tab');
+    b.setAttribute('aria-selected', String(lang === state.lang));
+    b.textContent = lang === 'sheets' ? 'sheets' : lang;
+    b.addEventListener('click', function(){ state.lang = lang; renderTabs(); renderSnippet(); });
+    host.appendChild(b);
+  });
+  var copyBtn = document.createElement('button');
+  copyBtn.type = 'button'; copyBtn.style.marginLeft = 'auto'; copyBtn.textContent = 'copy';
+  copyBtn.addEventListener('click', function(){
+    copy($('snip').textContent, 'Snippet');
+  });
+  host.appendChild(copyBtn);
+}
+
+/* ---------- URL block ---------- */
+function renderUrls(){
+  var cfg = currentConfig();
+  var base = cfg.base.replace(/\/+$/, '');
+  var rows = [
+    ['push', base + '/hook/' + cfg.slug, 'push', 'the URL you give the sender'],
+    ['pull', base + '/v1/' + cfg.slug + '?since=0', 'pull', 'cursor-paged, oldest first'],
+    ['latest', base + '/v1/' + cfg.slug + '/latest', 'pull', 'newest delivery with its envelope'],
+    ['payload', base + '/v1/' + cfg.slug + '/payload', 'pull', 'newest payload alone']
+  ];
+  var host = $('urlBlock');
+  host.innerHTML = '';
+  rows.forEach(function(r){
+    var line = document.createElement('div');
+    line.className = 'urlline';
+    line.innerHTML = '<span class="tag">' + r[0] + '</span>' +
+      '<code class="' + r[2] + '" title="' + esc(r[3]) + '">' + esc(r[1]) + '</code>';
+    var btn = document.createElement('button');
+    btn.type = 'button'; btn.className = 'tiny'; btn.textContent = 'copy';
+    btn.addEventListener('click', function(){ copy(r[1], r[0]); });
+    line.appendChild(btn);
+    host.appendChild(line);
+  });
+  $('urlFor').textContent = cfg.slug;
+}
+
+/* ---------- builder ---------- */
+function buildRegistry(){
+  var slug = ($('bSlug').value || '').trim();
+  if(!/^[a-z0-9_-]+$/.test(slug)){
+    flash('Slug must be lower-case letters, digits, hyphen or underscore');
+    return null;
+  }
+  state.built = {
+    kind: $('bKind').value,
+    ingest_secret: randomToken(24),
+    read_token: randomToken(24),
+    retain: 500,
+    description: ''
+  };
+  var doc = {}; doc[slug] = state.built;
+  renderUrls(); renderSnippet();
+  return JSON.stringify(doc, null, 2);
+}
+
+$('genBtn').addEventListener('click', function(){
+  var json = buildRegistry();
+  if(json) flash('Generated — two 48-hex-char credentials');
+});
+$('copyRegistry').addEventListener('click', function(){
+  var json = state.built ? null : buildRegistry();
+  if(!state.built) return;
+  var doc = {}; doc[($('bSlug').value || 'my-hook').trim()] = state.built;
+  copy(JSON.stringify(doc, null, 2), 'var/webhook-endpoints.json');
+});
+['bSlug','bBase','bKind'].forEach(function(id){
+  $(id).addEventListener('input', function(){ renderUrls(); renderSnippet(); });
+});
+
+/* ---------- inspector ---------- */
+function walk(value, prefix, out){
+  if(value && typeof value === 'object' && !Array.isArray(value)){
+    Object.keys(value).forEach(function(k){ walk(value[k], prefix ? prefix + '.' + k : k, out); });
+  } else if(Array.isArray(value)){
+    out.push(prefix + '[]');
+    if(value.length) walk(value[0], prefix + '[0]', out);
+  } else {
+    out.push(prefix);
+  }
+}
+function renderInspector(){
+  var host = $('paths'); host.innerHTML = '';
+  var raw = $('sample').value.trim();
+  if(!raw){ $('inspectNote').textContent = ''; return; }
+  var parsed;
+  try { parsed = JSON.parse(raw); }
+  catch(e){
+    $('inspectNote').innerHTML = '<b>Not JSON.</b> The gateway would still keep this &mdash; as <code>{"text": ...}</code>. A body it cannot parse is a delivery that happened, and losing it would hide the sender’s misconfiguration.';
+    return;
+  }
+  var paths = []; walk(parsed, '', paths);
+  var cfg = currentConfig();
+  paths.filter(Boolean).forEach(function(p){
+    var b = document.createElement('button');
+    b.type = 'button'; b.textContent = p;
+    b.title = 'copy a jq expression for this field';
+    b.addEventListener('click', function(){
+      copy('curl -s -H "Authorization: Bearer ' + cfg.read + '" "' +
+           cfg.base.replace(/\/+$/,'') + '/v1/' + cfg.slug + '/payload" | jq -r .' + p, p);
+    });
+    host.appendChild(b);
+  });
+  var stripped = [];
+  (function scan(v, pre){
+    if(v && typeof v === 'object'){
+      Object.keys(v).forEach(function(k){
+        if(['secret','token','password','api_key','apikey','signature','auth','hmac','sig'].indexOf(k.toLowerCase()) >= 0){
+          stripped.push(pre ? pre + '.' + k : k);
+        }
+        scan(v[k], pre ? pre + '.' + k : k);
+      });
+    }
+  })(parsed, '');
+  $('inspectNote').innerHTML = paths.filter(Boolean).length + ' field path' +
+    (paths.filter(Boolean).length === 1 ? '' : 's') + '. Click one for a jq command.' +
+    (stripped.length ? ' <b>Stripped before storage:</b> <code>' + stripped.map(esc).join('</code>, <code>') + '</code>.' : '');
+}
+$('sample').addEventListener('input', renderInspector);
+
+/* ---------- live mode ---------- */
+function authHeaders(){ return {'Authorization': 'Bearer ' + state.token}; }
+
+async function loadEndpoints(){
+  var r = await fetch('/v1/endpoints', {headers: authHeaders()});
+  if(r.status === 401){ flash('That token does not match any endpoint'); return; }
+  if(!r.ok){ flash('Gateway answered ' + r.status); return; }
+  var body = await r.json();
+  state.endpoints = body.endpoints || [];
+  $('epCount').textContent = state.endpoints.length + ' readable';
+  renderEndpoints();
+  if(state.endpoints.length && !state.selected){ select(state.endpoints[0]); }
+}
+
+function renderEndpoints(){
+  var list = $('epList'); list.innerHTML = '';
+  if(!state.endpoints.length){
+    var li = document.createElement('li');
+    li.innerHTML = '<div class="empty" style="padding:22px 16px; color:var(--ink-3); font-size:13px">No endpoints for this token.</div>';
+    list.appendChild(li); return;
+  }
+  state.endpoints.forEach(function(ep){
+    var f = freshness(ep.seconds_since_last, ep.count);
+    var li = document.createElement('li');
+    var b = document.createElement('button');
+    b.type = 'button'; b.className = 'ep';
+    b.setAttribute('aria-current', String(state.selected && state.selected.slug === ep.slug));
+    b.innerHTML =
+      '<span class="slug">' + esc(ep.slug) + '</span>' +
+      '<span class="chip ' + f.cls + '">' + esc(f.text) + '</span>' +
+      '<span class="sub">' + esc(ep.kind) + ' &middot; ' + ep.count + ' kept of ' + ep.retain +
+      (ep.last_seq != null ? ' &middot; seq ' + ep.last_seq : '') + '</span>';
+    b.addEventListener('click', function(){ select(ep); });
+    li.appendChild(b); list.appendChild(li);
+  });
+}
+
+function select(ep){
+  state.selected = ep; state.cursor = 0; state.deliveries = [];
+  renderEndpoints(); renderUrls(); renderSnippet();
+  $('feedCard').hidden = false;
+  refreshFeed();
+}
+
+async function refreshFeed(){
+  if(!state.selected) return;
+  var slug = state.selected.slug;
+  try {
+    var r = await fetch('/v1/' + encodeURIComponent(slug) + '?since=' + state.cursor + '&limit=50',
+                        {headers: authHeaders()});
+    if(!r.ok) return;
+    var body = await r.json();
+    if(state.selected.slug !== slug) return;   // switched while in flight
+    state.cursor = body.next_cursor;
+    body.deliveries.forEach(function(d){ state.deliveries.unshift(d); });
+    state.deliveries = state.deliveries.slice(0, 40);
+    renderFeed(body);
+  } catch(e){ /* a poll that fails is retried on the next tick */ }
+}
+
+function renderFeed(body){
+  var host = $('feed'); host.innerHTML = '';
+  $('feedMeta').textContent = state.selected.slug + ' · cursor ' + state.cursor;
+  if(!state.deliveries.length){
+    host.innerHTML = '<div class="empty">Nothing since cursor 0.<br>Send a test delivery with the <b>curl</b> snippet.</div>';
+    return;
+  }
+  state.deliveries.forEach(function(d){
+    var el = document.createElement('div');
+    el.className = 'dlv';
+    var when = new Date(d.received_at);
+    el.innerHTML =
+      '<div class="head"><span class="seq">#' + d.seq + '</span>' +
+      '<span class="when">' + esc(when.toLocaleTimeString()) + '</span>' +
+      '<span>' + esc(d.source_ip || 'unknown source') + '</span>' +
+      '<span>' + d.body_bytes + ' B</span>' +
+      '<span>' + esc(d.content_type || 'no content-type') + '</span></div>' +
+      '<pre>' + paintJson(d.payload) + '</pre>';
+    host.appendChild(el);
+  });
+}
+
+function startPolling(){
+  if(state.poller) clearInterval(state.poller);
+  state.poller = setInterval(function(){ refreshFeed(); loadEndpoints(); }, 5000);
+}
+
+$('connectBtn').addEventListener('click', function(){
+  state.token = $('tokenInput').value.trim();
+  if(!state.token){ flash('Paste a read token first'); return; }
+  try { localStorage.setItem('gw_token', state.token); } catch(e){}
+  state.selected = null;
+  loadEndpoints().then(startPolling);
+});
+$('forgetBtn').addEventListener('click', function(){
+  state.token = ''; $('tokenInput').value = '';
+  try { localStorage.removeItem('gw_token'); } catch(e){}
+  if(state.poller) clearInterval(state.poller);
+  state.endpoints = []; state.selected = null; state.deliveries = [];
+  renderEndpoints(); $('feedCard').hidden = true;
+  flash('Token forgotten on this device');
+});
+
+/* ---------- boot ---------- */
+async function boot(){
+  renderTabs();
+  renderUrls();
+  renderSnippet();
+  renderInspector();
+
+  var health = null;
+  try {
+    var r = await fetch('/health', {cache: 'no-store'});
+    if(r.ok){ var b = await r.json(); if(b && b.status === 'ok') health = b; }
+  } catch(e){ /* not served by a gateway; builder mode is the answer */ }
+
+  if(health){
+    state.live = true;
+    state.base = location.origin;
+    $('bBase').value = location.origin;
+    $('modeBadge').className = 'mode live';
+    $('modeText').textContent = health.endpoints + ' endpoint' + (health.endpoints === 1 ? '' : 's') + ' live';
+    $('liveAuth').hidden = false;
+    $('epCard').hidden = false;
+    var saved = '';
+    try { saved = localStorage.getItem('gw_token') || ''; } catch(e){}
+    if(saved){
+      state.token = saved; $('tokenInput').value = saved;
+      await loadEndpoints(); startPolling();
+    }
+    renderUrls(); renderSnippet();
+  } else {
+    $('modeText').textContent = 'builder';
+  }
+}
+boot();
+})();
+</script>

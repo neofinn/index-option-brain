@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import ast
 import json
 from datetime import UTC, datetime
-from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -13,6 +11,7 @@ from fastapi.testclient import TestClient
 from index_option_brain.integrations.tradingview.auth import WebhookGuard, WebhookGuardConfig
 from index_option_brain.integrations.tradingview.inbox import AlertInbox
 from index_option_brain.integrations.tradingview.receiver import create_webhook_app
+from tests.integrations.boundary import reachable_offences
 
 SECRET = "a-sufficiently-long-secret"
 NOW = datetime(2026, 9, 6, 4, 15, 30, tzinfo=UTC)
@@ -143,43 +142,7 @@ class TestItCannotTrade:
     is nothing in this package to place one with."""
 
     def test_no_module_here_reaches_execution_risk_or_a_broker(self) -> None:
-        package = Path(__file__).resolve().parents[3] / "index_option_brain"
-        forbidden = ("execution", "risk", "broker", "order")
-        seen: set[str] = set()
-        frontier = ["index_option_brain.integrations.tradingview"]
-        offences: list[str] = []
-
-        def module_path(name: str) -> Path | None:
-            relative = Path(*name.split(".")[1:])
-            for candidate in (
-                package / relative.with_suffix(".py"),
-                package / relative / "__init__.py",
-            ):
-                if candidate.exists():
-                    return candidate
-            return None
-
-        while frontier:
-            name = frontier.pop()
-            if name in seen:
-                continue
-            seen.add(name)
-            path = module_path(name)
-            if path is None:
-                continue
-            for node in ast.walk(ast.parse(path.read_text())):
-                targets: list[str] = []
-                if isinstance(node, ast.ImportFrom) and node.module:
-                    targets.append(node.module)
-                elif isinstance(node, ast.Import):
-                    targets.extend(alias.name for alias in node.names)
-                for target in targets:
-                    if not target.startswith("index_option_brain"):
-                        continue
-                    if any(part in forbidden for part in target.split(".")):
-                        offences.append(f"{name} imports {target}")
-                    frontier.append(target)
-
+        offences = reachable_offences("index_option_brain.integrations.tradingview")
         assert not offences, f"the receiver can reach order placement: {offences}"
 
     def test_the_receiver_holds_only_a_guard_an_inbox_and_a_sink(self) -> None:

@@ -362,6 +362,48 @@ class StrategyVersionRow(Base, Recorded):
     approved_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
 
+class WebhookDeliveryRow(Base):
+    """One inbound webhook, kept so it can be served back as an API.
+
+    The push-to-pull bridge: a service that can only POST writes a row here,
+    and a script that can only poll reads it out. That makes the cursor the
+    important column, and it is a **monotonic integer**, not a timestamp.
+
+    An earlier cursor in this codebase keyed on `occurred_at` and had to be
+    made inclusive (`>=`) to stop two deliveries in the same second from
+    losing one of them permanently — which then costs a re-read of the
+    boundary row on every poll. An autoincrementing sequence has neither
+    problem: it is unique, so `seq > since` is exact, and a poller that
+    stores the last `seq` it saw can never skip or repeat.
+
+    `Recorded` is deliberately not mixed in. Its UUID primary key would give
+    rows no order, and order is the whole point here.
+    """
+
+    __tablename__ = "webhook_deliveries"
+    __table_args__ = (
+        Index("ix_hook_endpoint_seq", "endpoint", "seq"),
+        Index("ix_hook_received", "received_at"),
+    )
+
+    seq: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    endpoint: Mapped[str] = mapped_column(String(64), nullable=False)
+    received_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    #: The address the delivery came from, as the socket saw it. Kept
+    #: because "which of my three senders sent this" is the first question
+    #: asked of a shared endpoint, and the payload rarely answers it.
+    source_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    content_type: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    #: Parsed JSON when the body was JSON, otherwise `{"text": ...}`. The
+    #: raw body is not kept: a sender that puts a credential in the body
+    #: (TradingView has no other option) would have it persisted verbatim,
+    #: and the auth layer strips it from the parsed form.
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    body_bytes: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+
 class SystemEventRow(Base, Recorded):
     """Spec §27 system_events. Operational facts, not market ones.
 

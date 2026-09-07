@@ -1,0 +1,64 @@
+# systemd unit for the webhook-to-API gateway.
+#
+#   sudo cp deploy/index-brain-gateway.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now index-brain-gateway
+#
+# The third process, with the third exposure profile:
+#
+#   index-option-brain.service      loopback, behind Tailscale, holds broker
+#                                   credentials, provably read-only API
+#   index-brain-tradingview.service public, strict TradingView alerts only
+#   index-brain-gateway.service     public, any sender, serves deliveries
+#                                   back over a read API
+#
+# The gateway holds no broker credentials and cannot reach an order path —
+# an import-graph test fails the build if that changes. It does hold the
+# endpoint registry, which is why the registry file must be mode 600 and
+# why the service refuses to start if it is not.
+
+[Unit]
+Description=Index Option Brain — webhook to API gateway
+Documentation=https://github.com/neofinn/index-option-brain
+After=network-online.target
+Wants=network-online.target
+# Not Requires=: accepting and storing a delivery works while the engine
+# is restarting, and coupling them would drop every webhook that fires
+# during a restart.
+After=index-option-brain.service
+
+[Service]
+Type=exec
+User=brain
+Group=brain
+WorkingDirectory=/opt/index-option-brain
+EnvironmentFile=/opt/index-option-brain/.env
+
+ExecStart=/opt/index-option-brain/.venv/bin/python -m index_option_brain.integrations.webhooks
+
+Restart=always
+RestartSec=10s
+
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+# The database and the registry. No bar store, no .env beyond what systemd
+# has already read into the environment.
+ReadWritePaths=/opt/index-option-brain/var
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=index-brain-gw
+
+[Install]
+WantedBy=multi-user.target
