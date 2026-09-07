@@ -73,6 +73,16 @@ refuses a self-signed or mismatched certificate and reports nothing, while
 the same URL works in your browser the moment you click through the
 warning.
 
+Run it from a machine with a **direct** connection. Behind an inspecting
+proxy the handshake succeeds against a certificate that machine trusts, so
+a naive check reports "ok" — the most misleading answer a script like this
+can give. It refuses to report TLS at all in that case, and detects the
+interception both from `HTTPS_PROXY` and from an issuer that belongs to a
+proxy vendor.
+
+When DNS fails it also looks up who serves the zone, so the answer is
+"add it at Hostinger" rather than "add an A record somewhere".
+
 ### `scripts/hook_soak.py` — state, restarts and races
 
 ```bash

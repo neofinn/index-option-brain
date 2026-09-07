@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import socket
 import ssl
 import sys
@@ -46,6 +47,29 @@ GREEN, RED, YELLOW, DIM, BOLD, OFF = (
 
 results: list[tuple[str, str, str]] = []   # (level, check, detail)
 
+#: Issuers that mean you are looking at an intercepting proxy rather than
+#: the origin. Not exhaustive and not meant to be — the proxy check below
+#: is the general answer; this catches the case where the environment
+#: variables are unset but the interception is happening anyway.
+INSPECTING_ISSUERS = ("anthropic", "zscaler", "netskope", "bluecoat", "mitmproxy",
+                      "charles", "fiddler", "forcepoint", "palo alto")
+
+
+def proxy_in_the_way() -> str | None:
+    """The proxy this process would use for an HTTPS request, if any.
+
+    This matters more than it looks. A TLS check run through an
+    intercepting proxy validates the **proxy's** certificate — which the
+    machine trusts, so the check passes — while telling you nothing about
+    what TradingView's servers will see. A tool whose whole job is to be
+    honest about a certificate must not pass under interception.
+    """
+    for name in ("https_proxy", "HTTPS_PROXY", "all_proxy", "ALL_PROXY"):
+        value = os.environ.get(name)
+        if value:
+            return f"{name}={value.split('@')[-1]}"
+    return None
+
 
 def ok(check: str, detail: str) -> None:
     results.append(("ok", check, detail))
@@ -59,11 +83,43 @@ def bad(check: str, detail: str) -> None:
     results.append(("bad", check, detail))
 
 
+def zone_of(host: str) -> str:
+    """The registrable zone, roughly: the last two labels."""
+    parts = host.split(".")
+    return ".".join(parts[-2:]) if len(parts) > 2 else host
+
+
+def dns_provider(zone: str) -> str | None:
+    """Who to ask to add the record.
+
+    Over DoH rather than a resolver library, so this stays standard
+    library. Best effort: a failure here is not the point of the script,
+    so it returns None rather than raising.
+    """
+    try:
+        request = urllib.request.Request(
+            f"https://dns.google/resolve?name={zone}&type=NS",
+            headers={"Accept": "application/dns-json"},
+        )
+        with urllib.request.urlopen(request, timeout=8) as response:
+            answers = json.load(response).get("Answer") or []
+    except Exception:  # noqa: BLE001 - a hint that fails is just no hint
+        return None
+    servers = sorted({str(a.get("data", "")).rstrip(".") for a in answers if a.get("data")})
+    return ", ".join(servers) if servers else None
+
+
 def check_dns(host: str, expect_ip: str | None) -> str | None:
     try:
         addresses = sorted({info[4][0] for info in socket.getaddrinfo(host, None)})
     except socket.gaierror as exc:
-        bad("DNS", f"{host} does not resolve ({exc.strerror or exc}). Add an A record.")
+        zone = zone_of(host)
+        where = dns_provider(zone)
+        hint = f" The zone {zone} is served by {where} — add it there." if where else ""
+        bad(
+            "DNS",
+            f"{host} does not resolve ({exc.strerror or exc}). Add an A record.{hint}",
+        )
         return None
     joined = ", ".join(addresses)
     if expect_ip and expect_ip not in addresses:
@@ -80,9 +136,15 @@ def check_dns(host: str, expect_ip: str | None) -> str | None:
 
 
 def check_port(host: str, port: int, *, required: bool) -> bool:
+    proxied = proxy_in_the_way() is not None
     try:
         with socket.create_connection((host, port), timeout=6):
-            ok(f"port {port}", "open")
+            if proxied:
+                # A proxy that terminates 80 and 443 accepts the connection
+                # itself, so "open" here says nothing about the origin.
+                warn(f"port {port}", "reachable, but through a proxy — not proof the origin is open")
+            else:
+                ok(f"port {port}", "open")
             return True
     except OSError as exc:
         message = f"cannot connect ({exc.strerror or exc})"
@@ -98,6 +160,19 @@ def check_port(host: str, port: int, *, required: bool) -> bool:
 
 
 def check_certificate(host: str) -> None:
+    proxy = proxy_in_the_way()
+    if proxy:
+        # Refused rather than attempted. Under interception the handshake
+        # succeeds against a certificate this machine trusts and the check
+        # would report "ok" — which is the most misleading possible answer
+        # from a script written to catch exactly this failure.
+        bad(
+            "TLS",
+            f"cannot be checked from here: {proxy} intercepts HTTPS, so the "
+            "certificate seen is the proxy's and not the one TradingView "
+            "will see. Run this from a machine with a direct connection.",
+        )
+        return
     context = ssl.create_default_context()
     try:
         with (
@@ -129,7 +204,19 @@ def check_certificate(host: str) -> None:
     issuer = dict(x[0] for x in certificate.get("issuer", ()))  # type: ignore[misc]
     names = [value for key, value in certificate.get("subjectAltName", ()) if key == "DNS"]
     expires_raw = certificate.get("notAfter")
-    detail = f"{protocol}, issued by {issuer.get('organizationName') or issuer.get('commonName') or '?'}"
+    issued_by = str(issuer.get("organizationName") or issuer.get("commonName") or "?")
+    if any(marker in issued_by.lower() for marker in INSPECTING_ISSUERS):
+        # The environment variables can be unset while interception still
+        # happens — a transparent proxy, or a CA pushed onto the machine.
+        # The issuer is the tell either way.
+        bad(
+            "TLS",
+            f"the certificate was issued by {issued_by!r}, which is an "
+            "intercepting proxy rather than a public CA. What TradingView "
+            "sees is not what this machine sees.",
+        )
+        return
+    detail = f"{protocol}, issued by {issued_by}"
     if expires_raw:
         expires = datetime.strptime(str(expires_raw), "%b %d %H:%M:%S %Y %Z").replace(
             tzinfo=UTC
@@ -220,7 +307,14 @@ def main() -> int:
     parser.add_argument("--slug", default="tradingview")
     args = parser.parse_args()
 
-    print(f"{BOLD}Checking https://{args.host}/hook/{args.slug}{OFF}\n")
+    print(f"{BOLD}Checking https://{args.host}/hook/{args.slug}{OFF}")
+    proxy = proxy_in_the_way()
+    if proxy:
+        print(
+            f"{YELLOW}This machine sends HTTPS through {proxy}. Port and TLS "
+            f"results describe the proxy, not the origin.{OFF}"
+        )
+    print()
 
     if check_dns(args.host, args.expect_ip) is not None:
         # 80 is not required for TradingView (it will call 443), but Caddy

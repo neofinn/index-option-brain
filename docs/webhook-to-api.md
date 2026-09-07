@@ -91,12 +91,21 @@ apex, for one concrete reason: `neofl.site` already resolves to
 the apex would mean repointing whatever that is. `hooks.neofl.site` does
 not exist yet, so it is free to take.
 
-**Path A — Caddy on the VPS.** One DNS record, then the certificate takes
-care of itself:
+**Path A — Caddy on the VPS.** One DNS record, added in **Hostinger's
+hPanel** (Domains → neofl.site → DNS / Nameservers), then the certificate
+takes care of itself:
 
 ```
-A    hooks.neofl.site    151.243.146.9
+Type  A
+Name  hooks
+Value 151.243.146.9
+TTL   default
 ```
+
+Hostinger's panel takes the label, not the full name — `hooks`, not
+`hooks.neofl.site`. Leave every existing record alone: the apex A record
+pointing at `103.216.171.56` is the parked page and nothing here needs it
+changed.
 
 ```bash
 sudo cp deploy/Caddyfile /etc/caddy/Caddyfile   # already names the host
@@ -138,6 +147,14 @@ python scripts/domain_check.py --host hooks.neofl.site --slug tradingview
 Six read-only checks, in the order the request travels: DNS (and whether
 it is the machine you meant), port 80, port 443, the certificate,
 `/health`, and `/hook/<slug>`.
+
+**Run it from a machine with a direct connection.** Behind a corporate or
+inspecting proxy the TLS check would validate the *proxy's* certificate —
+which that machine trusts, so it would pass — while saying nothing about
+what TradingView sees. The script refuses to report a TLS result in that
+situation rather than giving the most misleading answer available, and it
+recognises the interception two ways: `HTTPS_PROXY` being set, and an
+issuer that belongs to a proxy vendor rather than a public CA.
 
 The certificate check is the one that earns the script. **TradingView
 refuses a self-signed or mismatched certificate outright and tells you
