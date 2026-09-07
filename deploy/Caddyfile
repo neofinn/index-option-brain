@@ -1,0 +1,64 @@
+# Caddy in front of the webhook gateway, so TradingView can reach it.
+#
+#   sudo cp deploy/Caddyfile /etc/caddy/Caddyfile
+#   sudo systemctl reload caddy
+#
+# WHY THIS FILE EXISTS
+# TradingView calls webhooks on ports 80 and 443 ONLY. There is no setting
+# that changes it. The gateway binds 8788, so a TradingView alert cannot
+# reach it directly — something has to terminate TLS on 443 and forward.
+# That is the right shape regardless: the ingest secret travels in the
+# request body, so plain HTTP would put a credential on the wire.
+#
+# Caddy over nginx here for one reason: it obtains and renews the
+# certificate itself. A relay whose certificate silently expires is a
+# strategy that stops trading on a Tuesday for a reason nobody looks for.
+#
+# REQUIRES a domain whose A record points at this machine, and ports 80
+# and 443 reachable. If you have neither, use the Cloudflare Tunnel path
+# in deploy/cloudflared-config.yml instead — it needs no open port and no
+# DNS you control.
+
+hooks.example.com {
+	# The webhook path. This is the URL you paste into TradingView.
+	handle /hook/* {
+		reverse_proxy 127.0.0.1:8788
+	}
+
+	# The read API and the operator page. Behind basic auth as well as the
+	# read token, because this side answers with what your strategies are
+	# doing and the token ends up pasted into browsers and EAs.
+	#
+	#   caddy hash-password
+	# then replace the hash below. Delete this block entirely if you would
+	# rather keep the page on the tailnet only, which is the safer choice.
+	handle {
+		basic_auth {
+			operator $2a$14$REPLACE_WITH_THE_OUTPUT_OF_caddy_hash_password
+		}
+		reverse_proxy 127.0.0.1:8788
+	}
+
+	# X-Forwarded-For is set by Caddy, replacing anything the client sent,
+	# which is what makes WEBHOOK_TRUST_FORWARDED_FOR=1 safe. Without a
+	# proxy that overwrites it, trusting the header lets any sender name
+	# their own address and the IP allowlist stops meaning anything.
+	header {
+		-Server
+	}
+
+	# TradingView gives a webhook a few seconds. The gateway's own work is
+	# a validate and one insert, so a timeout this tight only ever fires
+	# when something is actually wrong.
+	request_body {
+		max_size 64KB
+	}
+
+	log {
+		output file /var/log/caddy/hooks.log
+		# The body is NOT logged. Senders that cannot set a header put
+		# their credential in it, and an access log is the least protected
+		# file on the box.
+		format json
+	}
+}

@@ -59,6 +59,60 @@ that `__main__.py` is the *only* file in the package that imports the
 relay, so "can this place an order" stays a question with one file as its
 answer.
 
+## The URL to paste into TradingView
+
+```
+https://<your-host>/hook/<slug>
+```
+
+Three things about that host, all of which bite before anything else
+works.
+
+**Ports 80 and 443 only.** TradingView's documentation says so and no
+setting changes it. The gateway binds 8788, so an alert cannot reach it
+directly — something must terminate TLS on 443 and forward. Right shape
+anyway: the ingest secret travels in the request *body*, so a plain-HTTP
+hop would put a credential on the wire.
+
+**Webhooks need a paid TradingView plan.** Essential and above. On the
+free tier the *Webhook URL* checkbox is present and does nothing.
+
+**Behind a proxy, set `WEBHOOK_TRUST_FORWARDED_FOR=1`.** Every request's
+peer address is then the proxy, so an endpoint's `allowed_ips` list of
+TradingView's egress addresses matches nothing and rejects everything —
+with a 401 that looks exactly like a wrong secret. The gateway logs a
+warning at startup when an allowlist is set and this is not.
+
+### Getting a host
+
+| | Use when | Cost |
+|---|---|---|
+| **Cloudflare Tunnel** | no public IP, no open ports, no DNS you control | free |
+| **Caddy on a VPS** | you have a domain pointing at the box and 80/443 open | free + the box |
+
+Fastest possible check that the whole chain works, no account needed:
+
+```bash
+cloudflared tunnel --url http://127.0.0.1:8788
+```
+
+It prints `https://<random-words>.trycloudflare.com`, and your webhook URL
+is that plus `/hook/<slug>`. **The URL changes every restart** — a quick
+tunnel is for testing, and an alert pointing at a dead hostname fails
+silently from the chart's side. `deploy/cloudflared-config.yml` has the
+named-tunnel version with a stable hostname; `deploy/Caddyfile` is the
+VPS-with-a-domain path, using Caddy rather than nginx because it renews
+the certificate itself — a relay whose certificate quietly expires is a
+strategy that stops trading on a Tuesday for a reason nobody looks for.
+
+### Checking the URL
+
+Open it in a browser. It answers **405** with a note saying it accepts
+POST only. That is the URL being *correct*: FastAPI's bare 405 is the
+least helpful thing to see at the moment you are checking whether you
+copied it right, so there is a handler that explains itself. A **404**
+means the slug is wrong; nothing at all means the host or the port is.
+
 ## Two credentials, never one
 
 Each endpoint has an `ingest_secret` and a `read_token`, and the registry

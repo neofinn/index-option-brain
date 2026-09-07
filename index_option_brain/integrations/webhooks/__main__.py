@@ -177,6 +177,7 @@ def main() -> int:
         on_delivery=delivery_handler(
             AlertInbox(), DatabaseAlertSink(database), relay
         ),
+        trust_forwarded_for=settings.webhook_trust_forwarded_for,
     )
     app.include_router(create_signal_feed_router(relay, endpoints))
 
@@ -189,6 +190,19 @@ def main() -> int:
             f"{len(endpoint.allowed_ips)} allowed IPs"
             if endpoint.allowed_ips
             else "any source address",
+        )
+    listed = [ep.slug for ep in endpoints.values() if ep.allowed_ips]
+    if listed and not settings.webhook_trust_forwarded_for:
+        # The footgun this warning exists for: behind a proxy every peer
+        # address is the proxy, so an allowlist of the sender's egress
+        # addresses matches nothing and the endpoint refuses everything —
+        # with a 401 that looks like a wrong secret.
+        logger.warning(
+            "endpoints with an IP allowlist (%s) but WEBHOOK_TRUST_FORWARDED_FOR "
+            "is off. If a reverse proxy or tunnel is in front — and for "
+            "TradingView one must be, since it calls only ports 80 and 443 — "
+            "every delivery will be rejected. Set it, or clear the allowlist.",
+            ", ".join(sorted(listed)),
         )
     if kill_switch_engaged():
         logger.warning(

@@ -638,6 +638,13 @@ GET  /v1/<slug>?since=N    the consumer's URL    read_token
 GET  /v1/<slug>/payload    newest payload alone, for curl | jq
 ```
 
+For TradingView the URL is `https://<host>/hook/<slug>` and the host has
+to be a proxy on 443: TradingView calls **ports 80 and 443 only**, so the
+gateway's own port is never the one being called. `deploy/Caddyfile` and
+`deploy/cloudflared-config.yml` cover both routes to one, and behind
+either you need `WEBHOOK_TRUST_FORWARDED_FOR=1` or an IP allowlist will
+reject everything with a 401 that looks like a wrong secret.
+
 Three things worth knowing about the design:
 
 **Two credentials per endpoint, and the registry refuses them if they

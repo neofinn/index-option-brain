@@ -226,8 +226,9 @@ footer code{font-family:"IBM Plex Mono",monospace}
             </select>
           </label>
           <label class="field">
-            <span>Base URL <span class="hint">(where this gateway answers)</span></span>
+            <span>Base URL <span class="hint">(the public https address, port 443)</span></span>
             <input type="text" id="bBase" value="https://hooks.example.com" spellcheck="false">
+            <span class="hint">Not the port you opened this page on. TradingView calls 80 and 443 only, so this is the proxy or tunnel in front.</span>
           </label>
           <div class="row">
             <button class="primary" id="genBtn" type="button">Generate credentials</button>
@@ -286,6 +287,7 @@ footer code{font-family:"IBM Plex Mono",monospace}
     <span>Body cap <code>64 KB</code></span>
     <span>Rate <code>120/min</code> per endpoint</span>
     <span>Relay routes are off until enabled on the machine.</span>
+    <span>TradingView webhooks: ports <code>80/443</code> only, paid plan only.</span>
   </footer>
 </div>
 
@@ -536,7 +538,16 @@ function snippetFor(lang, cfg){
 
 function currentConfig(){
   if(state.live && state.selected){
-    return {base: state.base, slug: state.selected.slug, read: state.token, ingest: '<INGEST_SECRET>'};
+    /* The editable base, not location.origin. The origin is whatever port
+       the operator opened this page on — and TradingView calls 80 or 443
+       only, so the URL to hand it is almost never the one in the address
+       bar. */
+    return {
+      base: $('bBase').value || state.base,
+      slug: state.selected.slug,
+      read: state.token,
+      ingest: '<INGEST_SECRET>'
+    };
   }
   var b = state.built;
   return {
@@ -594,6 +605,33 @@ function renderUrls(){
     line.appendChild(btn);
     host.appendChild(line);
   });
+
+  /* The single most common reason a TradingView webhook never fires:
+     the URL names a port TradingView will not call. Its documentation
+     allows 80 and 443 only, and there is no setting that changes it. */
+  var port = (base.match(/^https?:\/\/[^\/]*?:(\d+)/) || [])[1];
+  var scheme = base.split(':')[0];
+  var problem = null;
+  if(port && port !== '443' && port !== '80'){
+    problem = 'TradingView calls webhooks on ports <b>80 and 443 only</b>. ' +
+      'Port ' + esc(port) + ' will never be called — put a reverse proxy or a ' +
+      'Cloudflare Tunnel on 443 in front, and set the base URL to that.';
+  } else if(scheme === 'http' && base.indexOf('127.0.0.1') < 0 && base.indexOf('localhost') < 0){
+    problem = 'The ingest secret travels in the request <b>body</b>, so plain ' +
+      'http puts a credential on the wire. Use https.';
+  }
+  var note = document.createElement('div');
+  if(problem){
+    note.className = 'warnbox';
+    note.innerHTML = problem;
+  } else {
+    note.className = 'note';
+    note.innerHTML = 'Paste the <b>push</b> URL into TradingView&rsquo;s ' +
+      '<b>Webhook URL</b> field. Open it in a browser and it answers 405 with ' +
+      'a note &mdash; that is the URL being correct, not broken.';
+  }
+  host.appendChild(note);
+
   $('urlFor').textContent = cfg.slug;
 }
 
@@ -877,7 +915,10 @@ async function boot(){
   if(health){
     state.live = true;
     state.base = location.origin;
-    $('bBase').value = location.origin;
+    // Prefilled, not locked. If this page was opened on the gateway's own
+    // port, that port is exactly the one TradingView cannot call.
+    if(!$('bBase').value || $('bBase').value.indexOf('example.com') >= 0)
+      $('bBase').value = location.origin;
     $('modeBadge').className = 'mode live';
     $('modeText').textContent = health.endpoints + ' endpoint' + (health.endpoints === 1 ? '' : 's') + ' live';
     $('liveAuth').hidden = false;

@@ -76,6 +76,20 @@ class Settings(BaseSettings):
     page that can be used to mint them by whoever reaches it.
     """
     webhook_gateway_port: int = Field(default=8788, alias="WEBHOOK_GATEWAY_PORT")
+    webhook_trust_forwarded_for: bool = Field(
+        default=False, alias="WEBHOOK_TRUST_FORWARDED_FOR"
+    )
+    """Whether the gateway reads the source address from X-Forwarded-For.
+
+    Required whenever a reverse proxy or tunnel is in front, which for
+    TradingView it always is: TradingView calls port 80 or 443 only, so
+    the gateway's own port is never the one being called. Without this,
+    every request's peer address is the proxy and an endpoint's IP
+    allowlist matches nothing — it rejects everything.
+
+    Off by default because the header is client-supplied text: trusting it
+    with nothing in front lets any sender name their own address.
+    """
     signal_routes_file: str = Field(
         default="var/signal-routes.json", alias="SIGNAL_ROUTES_FILE"
     )

@@ -215,6 +215,13 @@ Three things about it worth knowing before you run it:
 
 ## Setting it up
 
+The webhook URL is `https://<your-host>/hook/<slug>`. TradingView calls
+**ports 80 and 443 only** and needs a **paid plan**, so the gateway's own
+8788 is never the port being called — see
+[docs/webhook-to-api.md](webhook-to-api.md#the-url-to-paste-into-tradingview)
+for the Cloudflare Tunnel and Caddy paths, and remember
+`WEBHOOK_TRUST_FORWARDED_FOR=1` once something is in front.
+
 ```bash
 cp deploy/webhook-endpoints.example.json var/webhook-endpoints.json
 cp deploy/signal-routes.example.json     var/signal-routes.json

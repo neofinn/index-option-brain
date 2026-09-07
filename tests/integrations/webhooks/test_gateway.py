@@ -365,3 +365,100 @@ class TestHandler:
         assert response.json()["handler"] == "failed"
         body = client.get("/v1/tv", headers={"Authorization": f"Bearer {READ}"}).json()
         assert body["count"] == 1
+
+
+class TestBehindAProxy:
+    """TradingView calls ports 80 and 443 only, so a proxy is always in
+    front — which is what makes the peer address useless for an allowlist.
+    """
+
+    def _client(
+        self, database: Database, *, trust: bool, allowed: str
+    ) -> TestClient:
+        app = create_gateway_app(
+            {
+                "tv": Endpoint(
+                    slug="tv",
+                    ingest_secret=INGEST,
+                    read_token=READ,
+                    allowed_ips=frozenset({allowed}),
+                )
+            },
+            DeliveryStore(database),
+            clock=lambda: NOW,
+            trust_forwarded_for=trust,
+        )
+        return TestClient(app)
+
+    def test_an_allowlist_behind_a_proxy_rejects_everything_untrusted(
+        self, database: Database
+    ) -> None:
+        """The footgun. The peer is the proxy, so an allowlist of the
+        sender's egress addresses matches nothing — and the 401 looks
+        exactly like a wrong secret."""
+        client = self._client(database, trust=False, allowed="52.89.214.238")
+        response = client.post(
+            "/hook/tv",
+            content=json.dumps({"secret": INGEST}),
+            headers={"X-Forwarded-For": "52.89.214.238"},
+        )
+        assert response.status_code == 401
+
+    def test_a_declared_proxy_lets_the_allowlist_work(
+        self, database: Database
+    ) -> None:
+        client = self._client(database, trust=True, allowed="52.89.214.238")
+        response = client.post(
+            "/hook/tv",
+            content=json.dumps({"secret": INGEST}),
+            headers={"X-Forwarded-For": "52.89.214.238, 10.0.0.1"},
+        )
+        assert response.status_code == 200
+
+    def test_the_leftmost_forwarded_entry_is_the_client(
+        self, database: Database
+    ) -> None:
+        """A proxy appends, so the leftmost value is the original client as
+        the first trusted hop saw it."""
+        client = self._client(database, trust=True, allowed="10.0.0.1")
+        response = client.post(
+            "/hook/tv",
+            content=json.dumps({"secret": INGEST}),
+            headers={"X-Forwarded-For": "52.89.214.238, 10.0.0.1"},
+        )
+        assert response.status_code == 401
+
+    def test_an_untrusted_header_cannot_forge_an_address(
+        self, database: Database
+    ) -> None:
+        client = self._client(database, trust=False, allowed="testclient")
+        response = client.post(
+            "/hook/tv",
+            content=json.dumps({"secret": INGEST}),
+            headers={"X-Forwarded-For": "1.2.3.4"},
+        )
+        # The peer address still decides, so the allowlist still holds.
+        assert response.status_code == 200
+
+
+class TestPastingTheUrlIntoABrowser:
+    def test_a_get_on_the_hook_path_explains_itself(self, client: TestClient) -> None:
+        """FastAPI's bare 405 is the least helpful answer available at the
+        moment someone is checking whether they copied the URL right."""
+        response = client.get("/hook/tv")
+        assert response.status_code == 405
+        body = response.json()
+        assert body["accepts"] == "POST"
+        assert "443" in body["detail"]
+
+    def test_an_unknown_slug_still_404s(self, client: TestClient) -> None:
+        assert client.get("/hook/nope").status_code == 404
+
+    def test_it_adds_no_write_route(self, client: TestClient) -> None:
+        writes = {
+            (route.path, method)
+            for route in client.app.routes  # type: ignore[attr-defined]
+            for method in getattr(route, "methods", set())
+            if method not in {"GET", "HEAD", "OPTIONS"}
+        }
+        assert writes == {("/hook/{slug}", "POST")}

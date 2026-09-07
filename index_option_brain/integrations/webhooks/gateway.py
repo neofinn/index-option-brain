@@ -26,6 +26,23 @@ any module in this package can reach one. A delivery here cannot become an
 order. Turning a delivery into a decision is the engine's job, done by
 polling this API like any other consumer.
 
+It must be reached through a proxy on 443
+-----------------------------------------
+TradingView calls webhooks on **ports 80 and 443 only** — its own
+documentation says so, and there is no setting that changes it. This
+service binds a high port, so a TradingView alert cannot reach it
+directly and must arrive through a reverse proxy or tunnel terminating
+TLS on 443. That is the right shape anyway: the ingest secret travels in
+the request body, so plain HTTP would put a credential on the wire.
+
+The consequence for the IP allowlist is the reason
+`trust_forwarded_for` exists. Behind a proxy every request's peer address
+is the proxy, so an `allowed_ips` list of TradingView's egress addresses
+matches nothing and the endpoint rejects everything. `X-Forwarded-For` is
+client-supplied text, so trusting it is off by default and must be
+switched on deliberately, with a proxy in front that overwrites the
+header rather than appending to whatever the client sent.
+
 Credentials in the body are stripped, never stored
 --------------------------------------------------
 TradingView cannot sign a request or set a header, so its shared secret
@@ -213,6 +230,27 @@ HTML_SHELL = (
 )
 
 
+def source_address(
+    request: Request, *, trust_forwarded_for: bool
+) -> str | None:
+    """The address to hold against an endpoint's allowlist.
+
+    Without a declared proxy this is the peer address and nothing else,
+    whatever headers claim. With one, the **leftmost** `X-Forwarded-For`
+    entry is used: a proxy appends, so the leftmost value is the original
+    client as the first trusted hop saw it.
+    """
+    peer = request.client.host if request.client else None
+    if not trust_forwarded_for:
+        return peer
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        first = forwarded.split(",")[0].strip()
+        if first:
+            return first
+    return peer
+
+
 def create_gateway_app(
     endpoints: dict[str, Endpoint],
     store: DeliveryStore,
@@ -220,6 +258,7 @@ def create_gateway_app(
     rate_limiter: RateLimiter | None = None,
     clock: Callable[[], datetime] | None = None,
     on_delivery: Callable[[Endpoint, dict[str, Any]], Any] | None = None,
+    trust_forwarded_for: bool = False,
 ) -> FastAPI:
     """The gateway, over a registry, a store, and nothing else.
 
@@ -277,7 +316,7 @@ def create_gateway_app(
         if endpoint is None:
             return JSONResponse({"error": "no such endpoint"}, status_code=404)
 
-        peer = request.client.host if request.client else None
+        peer = source_address(request, trust_forwarded_for=trust_forwarded_for)
         if endpoint.allowed_ips and (peer is None or peer not in endpoint.allowed_ips):
             return JSONResponse({"error": "rejected"}, status_code=401)
         if not limiter.allow(slug):
@@ -332,6 +371,31 @@ def create_gateway_app(
                 )
 
         return JSONResponse({"ok": True, "seq": seq}, status_code=200)
+
+    @app.get("/hook/{slug}")
+    async def hook_help(slug: str) -> JSONResponse:
+        """What a browser gets when someone pastes the webhook URL into it.
+
+        FastAPI's bare 405 for a GET on a POST-only path is the least
+        helpful answer available while someone is checking whether they
+        copied the URL correctly — which is exactly when they open it in a
+        browser. This says the URL is right and what has to call it.
+        """
+        if slug not in endpoints:
+            return JSONResponse({"error": "no such endpoint"}, status_code=404)
+        return JSONResponse(
+            {
+                "endpoint": slug,
+                "accepts": "POST",
+                "detail": (
+                    "This URL is correct. It accepts POST only — paste it "
+                    "into the sender's webhook field, not a browser. "
+                    "TradingView calls webhooks on ports 80 and 443 only, "
+                    "so this must be reached through a proxy on 443."
+                ),
+            },
+            status_code=405,
+        )
 
     @app.get("/v1/endpoints")
     async def list_endpoints(request: Request) -> JSONResponse:
