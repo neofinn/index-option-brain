@@ -362,11 +362,17 @@ function paintJson(value){
 /* ---------- snippet generation ---------- */
 var LANGS = ['curl', 'python', 'node', 'sheets', 'tradingview', 'strategy', 'mql'];
 
+/* Placeholders carry NO angle brackets on purpose: these strings are
+   inserted with innerHTML, and <READ_TOKEN> is parsed as a tag and
+   silently vanishes. That shipped once — the curl snippet rendered
+   -H "X-Webhook-Secret: " with nothing in it, and the TradingView tab
+   rendered "secret": "". Both fail with a 401 indistinguishable from a
+   wrong secret. */
 function snippetFor(lang, cfg){
   var base = cfg.base.replace(/\/+$/, '');
   var slug = cfg.slug || 'my-hook';
-  var read = cfg.read || '<READ_TOKEN>';
-  var ingest = cfg.ingest || '<INGEST_SECRET>';
+  var read = cfg.read || 'YOUR_READ_TOKEN';
+  var ingest = cfg.ingest || 'YOUR_INGEST_SECRET';
   if(lang === 'curl'){
     return [
       '<span class="c"># the newest payload alone, for a shell prompt</span>',
@@ -546,15 +552,15 @@ function currentConfig(){
       base: $('bBase').value || state.base,
       slug: state.selected.slug,
       read: state.token,
-      ingest: '<INGEST_SECRET>'
+      ingest: 'YOUR_INGEST_SECRET'
     };
   }
   var b = state.built;
   return {
     base: $('bBase').value || 'https://hooks.example.com',
     slug: $('bSlug').value || 'my-hook',
-    read: b ? b.read_token : '<READ_TOKEN>',
-    ingest: b ? b.ingest_secret : '<INGEST_SECRET>'
+    read: b ? b.read_token : 'YOUR_READ_TOKEN',
+    ingest: b ? b.ingest_secret : 'YOUR_INGEST_SECRET'
   };
 }
 

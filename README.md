@@ -724,17 +724,26 @@ default, and it has not been run against a broker — demo first.
 ```bash
 python scripts/mock_broker.py                    # a broker that logs, places nothing
 python scripts/hook_test.py --base <url> ...     # 22 payloads at a running gateway
+python scripts/hook_soak.py                      # restarts, races, broker failures
 ```
 
-Worth saying why they exist: **1647 passing tests did not catch either of
-the two real bugs in the webhook path.** A live run of `hook_test.py`
+Worth saying why they exist: **the unit suite did not catch any of the
+three real bugs in the webhook path.** A live run of `hook_test.py`
 against a running gateway found that the gateway's TradingView endpoint
 had no freshness check — `WebhookGuard` enforces one on the standalone
 receiver, and the second way in was written without it, so a
 twenty-minute-old breakout was accepted and woke the pipeline. And reading
 `mock_broker.py`'s output found that an `exit` on an HTTP destination
 rendered `{"transactionType": "EXIT", "quantity": 0}`, which no broker
-accepts and a mock answers 200 to.
+accepts and a mock answers 200 to. The third was found by opening the
+operator page in a browser: its `<INGEST_SECRET>` placeholder was parsed
+as an HTML tag by `innerHTML` and vanished, so the TradingView tab handed
+you an alert template containing `"secret": ""`.
+
+`hook_soak.py` covers what a single-shot harness cannot — a duplicate
+arriving after a restart, six concurrent deliveries of one intent, a
+broker answering 429, the retention cap, the rate limit, and the kill
+switch against a live route.
 
 Before any of that, point TradingView at [webhook.site](https://webhook.site)
 once. It answers the two questions nothing else can: whether your plan is

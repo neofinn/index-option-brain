@@ -462,3 +462,33 @@ class TestPastingTheUrlIntoABrowser:
             if method not in {"GET", "HEAD", "OPTIONS"}
         }
         assert writes == {("/hook/{slug}", "POST")}
+
+
+class TestThePageDoesNotEatItsOwnPlaceholders:
+    """A guard on a bug that shipped and was found by rendering the page.
+
+    The client-code snippets are inserted with `innerHTML`, so a
+    placeholder written as `<READ_TOKEN>` is parsed as an HTML tag and
+    disappears. The curl snippet rendered `-H "X-Webhook-Secret: "` with
+    nothing in it, and the TradingView tab rendered `"secret": ""` — both
+    of which fail with a 401 that looks exactly like a wrong secret, which
+    is the confusion this page exists to remove.
+    """
+
+    def _page(self) -> str:
+        from index_option_brain.integrations.webhooks.gateway import _ui_path
+
+        return _ui_path().read_text()
+
+    def test_no_angle_bracket_placeholder_survives_in_the_source(self) -> None:
+        import re
+
+        offenders = re.findall(r"'<[A-Z_]{3,}>'", self._page())
+        assert not offenders, (
+            f"innerHTML will swallow these: {offenders} — use YOUR_* instead"
+        )
+
+    def test_the_placeholders_it_does_use_are_plain(self) -> None:
+        page = self._page()
+        assert "YOUR_READ_TOKEN" in page
+        assert "YOUR_INGEST_SECRET" in page

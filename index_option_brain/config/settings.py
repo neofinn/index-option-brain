@@ -76,6 +76,15 @@ class Settings(BaseSettings):
     page that can be used to mint them by whoever reaches it.
     """
     webhook_gateway_port: int = Field(default=8788, alias="WEBHOOK_GATEWAY_PORT")
+    webhook_rate_limit: int = Field(default=120, alias="WEBHOOK_RATE_LIMIT")
+    """Deliveries per minute per endpoint before the gateway answers 429.
+
+    Retention already bounds the disk; this bounds the work. It is a
+    setting rather than a constant because the right value depends on the
+    sender — a 1-minute chart with six alert conditions is a different
+    shape from a broker's order callbacks — and because a hardcoded limit
+    cannot be exercised against a running process.
+    """
     webhook_trust_forwarded_for: bool = Field(
         default=False, alias="WEBHOOK_TRUST_FORWARDED_FOR"
     )

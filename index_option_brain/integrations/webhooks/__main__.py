@@ -50,6 +50,7 @@ from index_option_brain.integrations.webhooks.endpoints import (
 )
 from index_option_brain.integrations.webhooks.gateway import (
     HandlerNote,
+    RateLimiter,
     create_gateway_app,
 )
 from index_option_brain.integrations.webhooks.store import DeliveryStore
@@ -206,6 +207,7 @@ def main() -> int:
             AlertInbox(), DatabaseAlertSink(database), relay
         ),
         trust_forwarded_for=settings.webhook_trust_forwarded_for,
+        rate_limiter=RateLimiter(limit=settings.webhook_rate_limit),
     )
     app.include_router(create_signal_feed_router(relay, endpoints))
 

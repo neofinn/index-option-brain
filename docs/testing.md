@@ -57,13 +57,48 @@ Header values are redacted in its output. It is meant to be left running
 in a terminal, and a terminal is a place credentials get screenshotted out
 of.
 
+### `scripts/hook_soak.py` — state, restarts and races
+
+```bash
+python scripts/hook_soak.py                  # all seven
+python scripts/hook_soak.py --only restart   # one
+```
+
+`hook_test.py` fires one payload per case and reads the answer, which
+misses everything whose correctness depends on *history* — and history is
+where an order relay actually goes wrong. Each scenario here needs control
+of the gateway process, so the script writes its own config, starts the
+gateway and a mock broker, runs the scenario and reports. It touches none
+of your real configuration.
+
+| scenario | what it proves |
+|---|---|
+| `restart` | a duplicate arriving **after the process restarted** is still a duplicate — the whole reason the idempotency key is a database constraint |
+| `race` | six concurrent deliveries of one intent produce **exactly one** order |
+| `broker` | a 429 is recorded as FAILED, not retried, and does not free the key |
+| `rate` | the per-endpoint rate limit refuses, and not from the first delivery |
+| `retention` | `retain=3` keeps the newest three and discards the rest |
+| `kill` | `SIGNAL_RELAY_KILL=1` stops an **enabled** route |
+| `ea` | the EA is fed only actionable rows, and the cursor advances past the ones it is not given |
+
+`race` is the one worth running before you enable a live route. A
+sequential pair of deliveries proves only that the row was already
+committed; six threads hitting the constraint at once is the case it
+exists to lose safely.
+
 ### `pytest`
 
-1647 tests. `tests/signals/` covers the relay's guards, the idempotency
+1649 tests. `tests/signals/` covers the relay's guards, the idempotency
 constraint and the fault attribution; `tests/integrations/webhooks/`
-covers the gateway. Neither replaces a live run: the freshness gap in the
-gateway path and the exit defect both passed the unit suite and were found
-by the harness against a running process.
+covers the gateway.
+
+None of it replaces a live run. Three bugs passed the whole unit suite:
+the missing freshness check on the gateway path and the exit defect (found
+by the two harnesses), and the operator page rendering
+`"secret": ""` into a TradingView alert template because its
+`<INGEST_SECRET>` placeholder was parsed as an HTML tag by `innerHTML` and
+silently vanished — found by opening the page in a browser, which nothing
+had done until then.
 
 ## Third-party, in the order you need them
 
