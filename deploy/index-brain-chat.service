@@ -1,0 +1,66 @@
+# systemd unit for the Telegram chat bot.
+#
+#   sudo cp deploy/index-brain-chat.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now index-brain-chat
+#
+# The fourth process, and the only one needing NO inbound reachability at
+# all: it dials out to Telegram and long-polls. No public URL, no
+# certificate, no open port, works behind NAT. That makes it the one
+# operator surface that works before the DNS record exists.
+#
+#   index-option-brain.service       loopback, Tailscale, broker creds
+#   index-brain-tradingview.service  public, strict chart alerts
+#   index-brain-gateway.service      public, any sender + the signal relay
+#   index-brain-chat.service         outbound only, reads + two decisions
+#
+# It reads through the console's read-only API over loopback rather than by
+# importing the engine, so a message cannot make the system do anything.
+# Its only writes are deciding a calendar proposal and engaging the relay
+# kill switch — and there is no command to re-arm that, because chat should
+# only ever be able to make this system do less.
+
+[Unit]
+Description=Index Option Brain — Telegram chat bot
+Documentation=https://github.com/neofinn/index-option-brain
+After=network-online.target index-option-brain.service
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=brain
+Group=brain
+WorkingDirectory=/opt/index-option-brain
+EnvironmentFile=/opt/index-option-brain/.env
+
+# Refuses to start without TELEGRAM_ALLOWED_CHAT_IDS. A bot anyone who
+# finds it can query is worse than no bot, and what it answers with is
+# what your system is doing.
+ExecStart=/opt/index-option-brain/.venv/bin/python -m index_option_brain.chat
+
+Restart=always
+RestartSec=15s
+
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+# The database, for calendar decisions, and var/ for the kill-switch file
+# it creates. Nothing else.
+ReadWritePaths=/opt/index-option-brain/var
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=index-brain-chat
+
+[Install]
+WantedBy=multi-user.target

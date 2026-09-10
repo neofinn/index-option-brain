@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -42,10 +43,14 @@ from index_option_brain.contracts.events import Event
 from index_option_brain.contracts.market_state import MarketState
 from index_option_brain.events import (
     DeterministicTriggerEngine,
+    ScheduledEventCalendar,
     SignificanceFilterConfig,
     ThresholdSignificanceFilter,
     TriggerEngineConfig,
 )
+from index_option_brain.events.stored_calendar import RefreshableCalendar
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -125,6 +130,11 @@ class MarketPoller:
     symbols: tuple[str, ...] = ("NIFTY",)
     config: PollerConfig = field(default_factory=PollerConfig)
     trigger_config: TriggerEngineConfig = field(default_factory=TriggerEngineConfig)
+    calendar: ScheduledEventCalendar | None = None
+    """Confirmed dated events, for the four §4 triggers that are calendar
+    facts rather than measurements. None means those triggers never fire —
+    which is the correct behaviour with no calendar, and is why the
+    interface shipped empty rather than guessing at dates."""
     filter_config: SignificanceFilterConfig = field(
         default_factory=SignificanceFilterConfig
     )
@@ -222,8 +232,18 @@ class MarketPoller:
         self.stats.last_success_at = datetime.now(UTC)
 
         previous = self._previous.get(symbol)
+        if isinstance(self.calendar, RefreshableCalendar) and self.calendar.needs_refresh():
+            try:
+                await self.calendar.refresh()
+            except Exception:  # noqa: BLE001 - see below
+                # Blind, and swallowed: a calendar that cannot be reloaded
+                # keeps its last snapshot, and a poll cycle must not die
+                # because a database was briefly unreachable. The snapshot
+                # ages, and `is_stale` is what surfaces that.
+                logger.warning("calendar refresh failed; keeping the last snapshot")
         trigger_engine = self._triggers.setdefault(
-            symbol, DeterministicTriggerEngine(self.trigger_config)
+            symbol,
+            DeterministicTriggerEngine(self.trigger_config, calendar=self.calendar),
         )
         significance = self._filters.setdefault(
             symbol, ThresholdSignificanceFilter(self.filter_config)

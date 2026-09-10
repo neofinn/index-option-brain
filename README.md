@@ -283,6 +283,7 @@ index_option_brain/
 ├── backtest/         Backtest/replay engine (interface)
 ├── integrations/    TradingView receiver + Pine mirror; webhook-to-API gateway
 ├── signals/         Strategy signal contract, route table, guarded relay, EA feed
+├── chat/            Telegram bot: reads, calendar decisions, one-way kill switch
 ├── database/        SQLAlchemy base + UUID/timestamp/version mixin
 ├── monitoring/       Observability metric names + sink protocol
 └── tests/
@@ -755,6 +756,58 @@ switch against a live route.
 Before any of that, point TradingView at [webhook.site](https://webhook.site)
 once. It answers the two questions nothing else can: whether your plan is
 actually sending webhooks, and what TradingView really puts in the body.
+
+## Chatting to it from Telegram
+
+Full write-up in [docs/chat.md](docs/chat.md).
+
+```bash
+export TELEGRAM_BOT_TOKEN="..." TELEGRAM_ALLOWED_CHAT_IDS="4242"
+python -m index_option_brain.chat
+```
+
+**Long polling, not a webhook** — no public URL, no certificate, no
+inbound port. It works behind NAT and on a box whose DNS is not set up,
+which makes it the one operator surface that works before the A record
+exists.
+
+Reads (`/status`, `/brief NIFTY`, `/alerts`, `/cal`) go through the
+console's read-only API over loopback rather than by importing the engine,
+so a message cannot make the system do anything. **No command trades** —
+no buy, no sell, no size, no enabling a route — and a test asserts that as
+a property of the surface rather than one handler at a time.
+
+An unknown chat gets **no reply at all**, not an error: an error confirms
+the bot is real and attached to something worth probing. Message it once
+and read the log line naming the id it refused — that is how you find
+yours.
+
+`/kill` engages the relay kill switch and **there is no `/unkill`.**
+Re-arming means deleting a file on the machine. That asymmetry is the
+safety property: chat can only ever move this system toward doing less.
+
+## Dated events: an agent proposes, a human confirms
+
+Spec §4 has four triggers that are calendar facts rather than
+measurements — RBI policy, the Budget, index rebalances — and
+`ScheduledEventCalendar` shipped with **no implementation**, because no
+free Indian source serves them and inventing the dates would have put
+invented event risk into the blackout logic.
+
+`calendar_entries` is where an agent's reading lands, and the state
+machine is the safety design. **`StoredEventCalendar` returns CONFIRMED
+rows and nothing else.** An unverified date is unsafe in both directions —
+believed it stops trading on a quiet day, missed it trades through a loud
+one — so since neither direction of an error is safe, an unverified date
+does not participate in the decision at all. You confirm it from chat, and
+the source URL is shown because confirming a date you cannot check is the
+failure the table exists to avoid.
+
+The proposer itself is not built. The store, the state machine, the
+deterministic calendar and the confirmation flow are done and tested; the
+model-backed proposer plugs into the existing `IntelligenceProvider` seam.
+Shipping an untested model call into a path that can open a trading
+blackout would have been worse than shipping the seam.
 
 ## Source spec
 

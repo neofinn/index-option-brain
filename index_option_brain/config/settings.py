@@ -99,6 +99,32 @@ class Settings(BaseSettings):
     Off by default because the header is client-supplied text: trusting it
     with nothing in front lets any sender name their own address.
     """
+    telegram_bot_token: str = Field(default="", alias="TELEGRAM_BOT_TOKEN")
+    """From @BotFather. Empty disables the chat bot entirely.
+
+    A bearer credential: anyone holding it can act as the bot, so it goes
+    in `.env` beside the broker tokens and never in the repository.
+    """
+    telegram_allowed_chat_ids: str = Field(
+        default="", alias="TELEGRAM_ALLOWED_CHAT_IDS"
+    )
+    """Comma-separated numeric chat ids allowed to talk to the bot.
+
+    Required, and the bot refuses to start without it. A bot with no
+    allowlist answers anyone who finds it, and what it answers with is
+    what your system is doing. Get your id by messaging the bot once and
+    reading the log line it writes for the refusal.
+    """
+    console_base_url: str = Field(
+        default="http://127.0.0.1:8000", alias="CONSOLE_BASE_URL"
+    )
+    """Where the read-only console API answers, for the chat bot to read.
+
+    Loopback by default: the console is not on a public interface, and the
+    bot runs on the same box. Reading it over HTTP rather than importing
+    the engine is what keeps the bot unable to do anything but read.
+    """
+
     signal_routes_file: str = Field(
         default="var/signal-routes.json", alias="SIGNAL_ROUTES_FILE"
     )

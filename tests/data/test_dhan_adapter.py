@@ -19,7 +19,7 @@ verified), the unit conversions, and every place the adapter refuses to guess.
 from __future__ import annotations
 
 import json
-from datetime import date
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 
@@ -50,6 +50,12 @@ from index_option_brain.data.http import HttpResponse, RecordedSession
 
 RECORDED_MASTER = Path(__file__).parent / "recorded" / "dhan_scrip_master.csv"
 NEAR_EXPIRY = date(2026, 9, 8)
+
+#: The fixture's expiry is fixed, and greeks depend on time to expiry — so
+#: without a pinned clock these tests stop exercising the greeks path the
+#: day NEAR_EXPIRY passes, and fail having proved nothing. Two days before
+#: it, mid-session.
+BEFORE_EXPIRY = datetime(2026, 9, 6, 6, 0, tzinfo=UTC)
 
 
 @pytest.fixture
@@ -334,12 +340,16 @@ class TestBars:
 
 class TestOptionChain:
     async def test_both_sides_of_a_strike_are_read(self, master):
-        adapter = DhanMarketDataAdapter(client({"/optionchain": CHAIN}), master)
+        adapter = DhanMarketDataAdapter(
+            client({"/optionchain": CHAIN}), master, clock=lambda: BEFORE_EXPIRY
+        )
         chain = await adapter.get_option_chain("NIFTY", NEAR_EXPIRY)
         assert len(chain) == 3  # 23900 CE+PE, 24000 CE only
 
     async def test_a_one_sided_strike_is_not_invented(self, master):
-        adapter = DhanMarketDataAdapter(client({"/optionchain": CHAIN}), master)
+        adapter = DhanMarketDataAdapter(
+            client({"/optionchain": CHAIN}), master, clock=lambda: BEFORE_EXPIRY
+        )
         chain = await adapter.get_option_chain("NIFTY", NEAR_EXPIRY)
         at_24000 = [q for q in chain if q.contract.strike == Decimal(24000)]
         assert len(at_24000) == 1
@@ -349,7 +359,9 @@ class TestOptionChain:
         """Dhan reports the previous day's OI, not the change. Reporting the
         raw previous value as a change would invert the meaning of every OI
         build."""
-        adapter = DhanMarketDataAdapter(client({"/optionchain": CHAIN}), master)
+        adapter = DhanMarketDataAdapter(
+            client({"/optionchain": CHAIN}), master, clock=lambda: BEFORE_EXPIRY
+        )
         chain = await adapter.get_option_chain("NIFTY", NEAR_EXPIRY)
         ce = next(
             q
@@ -361,7 +373,9 @@ class TestOptionChain:
         assert ce.open_interest_change == 95996 - 21027
 
     async def test_an_unwind_comes_through_negative(self, master):
-        adapter = DhanMarketDataAdapter(client({"/optionchain": CHAIN}), master)
+        adapter = DhanMarketDataAdapter(
+            client({"/optionchain": CHAIN}), master, clock=lambda: BEFORE_EXPIRY
+        )
         chain = await adapter.get_option_chain("NIFTY", NEAR_EXPIRY)
         at_24000 = next(q for q in chain if q.contract.strike == Decimal(24000))
         assert at_24000.open_interest_change == 60000 - 75000
@@ -370,7 +384,9 @@ class TestOptionChain:
         """Not Dhan's, even though it publishes them: one rate and one
         day-count convention has to apply across every provider or delta fit
         compares quantities that are not the same quantity."""
-        adapter = DhanMarketDataAdapter(client({"/optionchain": CHAIN}), master)
+        adapter = DhanMarketDataAdapter(
+            client({"/optionchain": CHAIN}), master, clock=lambda: BEFORE_EXPIRY
+        )
         chain = await adapter.get_option_chain("NIFTY", NEAR_EXPIRY)
         ce = next(
             q
@@ -401,7 +417,9 @@ class TestOptionChain:
     async def test_lot_size_comes_from_the_instrument_master(self, master):
         """Not from the chain response. The master is the exchange's record,
         and it is what caught the 75-versus-65 error."""
-        adapter = DhanMarketDataAdapter(client({"/optionchain": CHAIN}), master)
+        adapter = DhanMarketDataAdapter(
+            client({"/optionchain": CHAIN}), master, clock=lambda: BEFORE_EXPIRY
+        )
         chain = await adapter.get_option_chain("NIFTY", NEAR_EXPIRY)
         assert all(q.contract.lot_size == 65 for q in chain)
 
@@ -684,3 +702,29 @@ class TestBrokerAdapter:
         )
         broker = DhanBrokerAdapter(DhanClient(config(), session), master)
         assert (await broker.get_order_status("B1")).state is OrderLifecycleState.OPEN
+
+
+class TestTheClockIsInjectable:
+    """A regression guard on a test that failed for the wrong reason.
+
+    `NEAR_EXPIRY` is fixed and greeks depend on time to expiry, so on
+    2026-09-10 the greeks assertion failed — not because the code broke,
+    but because the fixture's expiry had passed and the greeks path was
+    never entered. The Delta adapter had the identical bug a week earlier.
+    """
+
+    async def test_past_expiry_computes_no_greeks(self, master) -> None:
+        adapter = DhanMarketDataAdapter(
+            client({"/optionchain": CHAIN}),
+            master,
+            clock=lambda: datetime(2026, 9, 9, 6, 0, tzinfo=UTC),
+        )
+        chain = await adapter.get_option_chain("NIFTY", NEAR_EXPIRY)
+        assert all(quote.greeks is None for quote in chain)
+
+    async def test_before_expiry_computes_them(self, master) -> None:
+        adapter = DhanMarketDataAdapter(
+            client({"/optionchain": CHAIN}), master, clock=lambda: BEFORE_EXPIRY
+        )
+        chain = await adapter.get_option_chain("NIFTY", NEAR_EXPIRY)
+        assert any(quote.greeks is not None for quote in chain)

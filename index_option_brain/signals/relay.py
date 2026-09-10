@@ -42,6 +42,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import func, select
@@ -68,6 +69,17 @@ logger = logging.getLogger(__name__)
 #: says. A single variable an operator can set over SSH in one command,
 #: because the moment you need it you do not want to be editing JSON.
 KILL_SWITCH_ENV = "SIGNAL_RELAY_KILL"
+
+#: A second way in, for the same switch. The environment variable cannot
+#: be set by anything but the relay's own process, and the moment you most
+#: need to stop trading you may be holding a phone rather than a terminal
+#: — so the chat bot engages it by creating this file instead.
+#:
+#: Deliberately one-way from outside: the bot can create the file, and
+#: only someone at the machine can remove it. A switch that can be flipped
+#: back from chat is one an argument in a group chat can turn off.
+KILL_SWITCH_FILE_ENV = "SIGNAL_RELAY_KILL_FILE"
+DEFAULT_KILL_SWITCH_FILE = "var/RELAY_KILLED"
 
 _TRUTHY = {"1", "true", "yes", "on"}
 
@@ -120,9 +132,35 @@ class DispatchResult:
         return body
 
 
-def kill_switch_engaged(environ: Mapping[str, str] | None = None) -> bool:
+def kill_switch_path(environ: Mapping[str, str] | None = None) -> Path:
     env = environ if environ is not None else os.environ
-    return env.get(KILL_SWITCH_ENV, "").strip().lower() in _TRUTHY
+    return Path(env.get(KILL_SWITCH_FILE_ENV) or DEFAULT_KILL_SWITCH_FILE)
+
+
+def kill_switch_engaged(environ: Mapping[str, str] | None = None) -> bool:
+    """Either way of engaging it counts.
+
+    Checked on every dispatch rather than cached, because a cached kill
+    switch is one that does not take effect until a restart — which is the
+    opposite of what it is for.
+    """
+    env = environ if environ is not None else os.environ
+    if env.get(KILL_SWITCH_ENV, "").strip().lower() in _TRUTHY:
+        return True
+    try:
+        os.stat(kill_switch_path(env))
+    except FileNotFoundError:
+        # The only answer that means "definitely not engaged".
+        return False
+    except (OSError, ValueError):
+        # Anything else — a permission error on the parent, an
+        # unrepresentable path — means the file's absence cannot be
+        # established, and an unestablished absence is not a reason to
+        # start trading. `Path.exists()` is deliberately not used here: it
+        # returns False for every one of these, which makes "no kill file"
+        # and "cannot see whether there is a kill file" the same answer.
+        return True
+    return True
 
 
 def _number(value: Decimal) -> int | float:

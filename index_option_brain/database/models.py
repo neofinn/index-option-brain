@@ -460,6 +460,63 @@ class SignalDispatchRow(Base):
     response_body: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
+class CalendarEntryRow(Base):
+    """A dated event that changes the risk of holding a position, and how
+    much it is trusted.
+
+    Spec §4 names four trigger types that are calendar facts rather than
+    measurements — RBI policy, the Budget, an index rebalance, a scheduled
+    economic release — and `ScheduledEventCalendar` has had no
+    implementation because no free Indian source serves them. An agent can
+    read them out of circulars and press releases, which is what this table
+    is for.
+
+    The `state` column is the whole safety design. An unverified date is
+    dangerous in **both** directions: treated as real it makes the system
+    refuse to trade on a day nothing is happening, and missed it lets the
+    system trade through a day something is. Neither direction of a wrong
+    date is the safe one — so a proposal does not affect trading at all
+    until a human confirms it. `StoredEventCalendar` returns CONFIRMED rows
+    and nothing else.
+
+    `source` and `proposed_by` are not decoration. A date whose provenance
+    is unrecorded cannot be re-checked when it turns out to be wrong, and
+    the first question about a bad blackout is where the date came from.
+    """
+
+    __tablename__ = "calendar_entries"
+    __table_args__ = (
+        # One row per event per instant, so re-running a proposer does not
+        # accumulate duplicates of the same MPC meeting.
+        UniqueConstraint("name", "starts_at", name="uq_calendar_event"),
+        Index("ix_calendar_state_time", "state", "starts_at"),
+    )
+
+    seq: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    starts_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(String(24), nullable=False, default="OTHER")
+    #: PROPOSED, CONFIRMED or REJECTED.
+    state: Mapped[str] = mapped_column(String(12), nullable=False, default="PROPOSED")
+    blocks_new_entries: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True
+    )
+    #: Where the date came from — a URL for an agent, "operator" for a
+    #: hand-entered one.
+    source: Mapped[str | None] = mapped_column(Text, nullable=True)
+    proposed_by: Mapped[str] = mapped_column(String(64), nullable=False, default="operator")
+    proposed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    decided_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    decided_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    note: Mapped[str | None] = mapped_column(String(280), nullable=True)
+
+
 class SystemEventRow(Base, Recorded):
     """Spec §27 system_events. Operational facts, not market ones.
 

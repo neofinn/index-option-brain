@@ -44,6 +44,7 @@ from index_option_brain.data.providers import (
     verified_providers,
 )
 from index_option_brain.database.engine import Database
+from index_option_brain.events.calendar_store import CalendarStore
 from index_option_brain.integrations.tradingview import chartfeed
 from index_option_brain.integrations.tradingview.sink import pending_alerts
 
@@ -733,6 +734,63 @@ def create_app(
         except FeedUnavailable as exc:
             return f"# {symbol}: no live data — {exc}"
         return chartfeed.build(result)
+
+    @app.get("/api/calendar")
+    async def calendar_state(limit: int = 20) -> dict[str, Any]:
+        """Dated events: what is confirmed, and what is waiting on a human.
+
+        Both halves, because they answer different questions. `confirmed`
+        is what can open an event blackout; `pending` is what an agent
+        proposed and nobody has decided — and a proposal affects nothing
+        until it is decided, which is the whole point of the state machine.
+        """
+        if live.capture is None:
+            return {
+                "available": False,
+                "reason": "No database configured, so no calendar is stored",
+                "confirmed": [],
+                "pending": [],
+            }
+        store = CalendarStore(live.capture.database)
+        try:
+            confirmed = await store.upcoming(limit=min(limit, 100))
+            pending = await store.pending(limit=min(limit, 100))
+        except Exception as exc:  # noqa: BLE001 - the console must still render
+            return {
+                "available": False,
+                "reason": f"Could not read the calendar: {exc}",
+                "confirmed": [],
+                "pending": [],
+            }
+
+        def shape(entry: Any) -> dict[str, Any]:
+            return {
+                "seq": entry.seq,
+                "name": entry.name,
+                "starts_at": entry.starts_at.isoformat(),
+                "kind": str(entry.kind),
+                "blocks_new_entries": entry.blocks_new_entries,
+                # Carried through so a bad blackout can be traced to where
+                # its date came from.
+                "source": entry.source,
+                "proposed_by": entry.proposed_by,
+                "decided_by": entry.decided_by,
+            }
+
+        return {
+            "available": True,
+            "confirmed": [shape(e) for e in confirmed],
+            "pending": [shape(e) for e in pending],
+            # Said explicitly rather than left to be inferred from an empty
+            # list: no confirmed events and no calendar at all look the
+            # same from the data, and only one of them means "nothing is
+            # scheduled".
+            "blackout_in_effect_from": (
+                confirmed[0].starts_at.isoformat()
+                if confirmed and confirmed[0].blocks_new_entries
+                else None
+            ),
+        }
 
     @app.get("/api/tradingview")
     async def tradingview_alerts(limit: int = 25) -> dict[str, Any]:

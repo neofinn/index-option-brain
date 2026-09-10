@@ -62,6 +62,7 @@ that exists on the other host is a confusing way to learn this.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta, timezone
 from decimal import Decimal
@@ -422,10 +423,17 @@ class DhanMarketDataAdapter(IndexDataAdapter, OptionsChainAdapter, AccountDataAd
         master: DhanInstrumentMaster,
         *,
         index_names: dict[str, str] | None = None,
+        clock: Callable[[], datetime] | None = None,
     ) -> None:
         self._client = client
         self._master = master
         self._names = index_names or {"NIFTY": "Nifty 50", "BANKNIFTY": "Nifty Bank"}
+        # Injectable because greeks depend on time to expiry: a fixture
+        # whose expiry has passed computes no greeks and the test asserting
+        # they exist fails on the day it arrives, having proved nothing
+        # about the code. The Delta adapter had exactly this and its tests
+        # now pin the clock; this is the same fix.
+        self._clock = clock or (lambda: datetime.now(UTC))
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -659,7 +667,7 @@ class DhanMarketDataAdapter(IndexDataAdapter, OptionsChainAdapter, AccountDataAd
             )
 
         spot = _optional_decimal(data.get("last_price"))
-        as_of = datetime.now(UTC)
+        as_of = self._clock()
         years = max(
             0.0,
             (

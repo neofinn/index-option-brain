@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Mapping
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -17,6 +18,7 @@ from index_option_brain.signals.relay import (
     KILL_SWITCH_ENV,
     Outcome,
     SignalRelay,
+    kill_switch_engaged,
     render_body,
     template_fields,
 )
@@ -125,7 +127,14 @@ def relay_over(
             database,
             session=http,
             clock=clock or (lambda: NOW),
-            environ=environ if environ is not None else {},
+            # Never {}: an empty environment resolves the kill-switch file
+            # to var/RELAY_KILLED relative to the working directory, so the
+            # day that file exists every one of these tests blocks and the
+            # failure looks like a logic bug. Pointed at a path that cannot
+            # exist instead.
+            environ=environ
+            if environ is not None
+            else {"SIGNAL_RELAY_KILL_FILE": "/nonexistent/relay-killed"},
         ),
         http,
     )
@@ -637,3 +646,53 @@ class TestSenderVersusOperatorFault:
         )
         assert result.outcome == Outcome.BLOCKED
         assert result.sender_error is False
+
+
+class TestTheKillSwitchFile:
+    """The second way in, for when you are holding a phone.
+
+    The environment variable cannot be set by anything but the relay's own
+    process, so the chat bot engages the switch by creating a file. The
+    asymmetry is deliberate: creating it is possible from outside, removing
+    it is not.
+    """
+
+    def test_a_present_file_engages_it(self, tmp_path: Path) -> None:
+        marker = tmp_path / "RELAY_KILLED"
+        marker.write_text("")
+        assert kill_switch_engaged({"SIGNAL_RELAY_KILL_FILE": str(marker)}) is True
+
+    def test_an_absent_file_does_not(self, tmp_path: Path) -> None:
+        assert (
+            kill_switch_engaged(
+                {"SIGNAL_RELAY_KILL_FILE": str(tmp_path / "nothing")}
+            )
+            is False
+        )
+
+    def test_the_env_var_still_works_on_its_own(self, tmp_path: Path) -> None:
+        assert kill_switch_engaged(
+            {
+                KILL_SWITCH_ENV: "1",
+                "SIGNAL_RELAY_KILL_FILE": str(tmp_path / "nothing"),
+            }
+        ) is True
+
+    async def test_a_live_route_stops_when_the_file_appears(
+        self, database: Database, tmp_path: Path
+    ) -> None:
+        marker = tmp_path / "RELAY_KILLED"
+        relay, http = relay_over(
+            database, environ={"SIGNAL_RELAY_KILL_FILE": str(marker)}
+        )
+        assert (await relay.dispatch("tv-strategy", payload())).outcome == Outcome.SENT
+        marker.write_text("stopped from chat")
+        result = await relay.dispatch(
+            "tv-strategy", payload(bar_time="2026-09-07T04:11:00Z")
+        )
+        assert result.outcome == Outcome.BLOCKED
+        assert len(http.calls) == 1
+
+    def test_an_unreadable_path_engages_it(self) -> None:
+        """An unreadable path is not a reason to start trading."""
+        assert kill_switch_engaged({"SIGNAL_RELAY_KILL_FILE": "\x00bad"}) is True
