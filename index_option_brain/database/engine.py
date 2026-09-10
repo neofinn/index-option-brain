@@ -18,13 +18,15 @@ gating a trade — would be the more dangerous failure.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
-from sqlalchemy import text
+from sqlalchemy import inspect, text
+from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -39,6 +41,23 @@ logger = logging.getLogger(__name__)
 #: Where a SQLite database lands when nothing else is configured. Kept beside
 #: the bar snapshots so one directory is the whole persistent footprint.
 DEFAULT_SQLITE_PATH = Path("var/index_brain.sqlite")
+
+
+#: Substrings every supported backend uses for "this object is already
+#: there". Matched on the message because SQLAlchemy does not normalise
+#: these into distinct exception classes, and the alternative — treating
+#: every OperationalError as benign — would hide a real broken schema.
+_DUPLICATE_MARKERS = (
+    "already exists",          # SQLite, PostgreSQL
+    "duplicate table",
+    "duplicate object",
+    "duplicatetable",
+)
+
+
+def _is_duplicate_object(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return any(marker in message for marker in _DUPLICATE_MARKERS)
 
 
 def _redact(url: str) -> str:
@@ -146,9 +165,57 @@ class Database:
     def dialect(self) -> str:
         return self.engine.dialect.name
 
-    async def create_schema(self) -> None:
-        async with self.engine.begin() as connection:
-            await connection.run_sync(Base.metadata.create_all)
+    async def create_schema(self, *, attempts: int = 3) -> None:
+        """Create the tables, tolerating another process doing it at once.
+
+        `create_all` passes `checkfirst=True`, which reflects the existing
+        tables and then issues CREATEs — and those two steps are not one
+        transaction. Four processes now share this database (engine,
+        TradingView receiver, gateway, chat bot) and systemd starts them
+        together, so on a fresh box two of them routinely reflect an empty
+        schema and both try to create it. The loser dies with "table
+        market_snapshots already exists".
+
+        That was not theoretical: it killed the gateway on the first
+        rehearsal of the full four-process start, while the console came up
+        fine — so webhooks were dead and the console looked healthy.
+
+        A duplicate-object error means the schema exists, which is the
+        outcome that was wanted. So it is treated as success **after
+        verifying the tables really are there** — a bare except here would
+        turn a genuinely broken migration into a silent start.
+        """
+        for attempt in range(1, attempts + 1):
+            try:
+                async with self.engine.begin() as connection:
+                    await connection.run_sync(Base.metadata.create_all)
+            except (OperationalError, ProgrammingError) as exc:
+                if not _is_duplicate_object(exc):
+                    raise
+                if await self._schema_present():
+                    logger.info(
+                        "another process created the schema first; continuing"
+                    )
+                    return
+                if attempt == attempts:
+                    raise
+                # Lost the race but the schema is somehow still incomplete:
+                # give the other process a moment to finish and look again.
+                await asyncio.sleep(0.2 * attempt)
+            else:
+                return
+
+    async def _schema_present(self) -> bool:
+        """Whether every table this build expects actually exists."""
+        expected = set(Base.metadata.tables)
+        try:
+            async with self.engine.connect() as connection:
+                found = await connection.run_sync(
+                    lambda sync_conn: set(inspect(sync_conn).get_table_names())
+                )
+        except Exception:  # noqa: BLE001 - unreachable is not "present"
+            return False
+        return expected <= found
 
     def session_factory(self) -> async_sessionmaker[AsyncSession]:
         if self._sessions is None:

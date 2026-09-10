@@ -57,6 +57,27 @@ Header values are redacted in its output. It is meant to be left running
 in a terminal, and a terminal is a place credentials get screenshotted out
 of.
 
+### `scripts/preflight.sh` — every process, started at once
+
+```bash
+scripts/preflight.sh              # temp config, temp database
+scripts/preflight.sh --use-env    # your real .env and var/
+```
+
+Starting the processes **together** is a different test from starting them
+one at a time, and the first time that was actually tried it found a bug:
+all four call `create_all()` on the same SQLite file, two raced, and the
+gateway died with `table market_snapshots already exists` — while the
+console came up fine. Webhooks were dead and the console looked healthy.
+
+It probes each service on its own health path (they differ: `/health`,
+`/tv/health`, `/health`), fetches the gateway page, checks the chat bot
+refuses to start without a token *and* without an allowlist, and greps
+every log for a traceback. On failure it keeps the log directory.
+
+Run it on the box before enabling the systemd units, and again after any
+configuration change.
+
 ### `scripts/domain_check.py` — before TradingView ever sees the URL
 
 ```bash

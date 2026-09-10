@@ -129,12 +129,54 @@ CAPTURE_ENABLED=true
 # DHAN_ACCESS_TOKEN=
 # DELTA_API_KEY=
 # DELTA_API_SECRET=
+
+# --- inbound webhooks -------------------------------------------------
+# TradingView calls ports 80 and 443 ONLY, so both of the services below
+# have to be reached through a reverse proxy or tunnel on 443. See
+# deploy/Caddyfile (a domain pointing here) or deploy/cloudflared-config.yml
+# (no open ports needed). Then TRUST_FORWARDED_FOR must be on, or every
+# request's peer address is the proxy and an IP allowlist rejects
+# everything with a 401 that looks exactly like a wrong secret.
+# TRADINGVIEW_WEBHOOK_SECRET=
+# TRADINGVIEW_ALLOWED_IPS=
+WEBHOOK_TRUST_FORWARDED_FOR=1
+# WEBHOOK_RATE_LIMIT=120
+
+# --- chat ------------------------------------------------------------
+# Long polling: no public URL, no certificate, no inbound port. Works
+# before the DNS record exists. The allowlist is REQUIRED — message the
+# bot once and read the chat id it refused out of its log.
+# TELEGRAM_BOT_TOKEN=
+# TELEGRAM_ALLOWED_CHAT_IDS=
 ENVEOF
 fi
 chown "$APP_USER:$APP_USER" "$APP_DIR/.env"
 chmod 600 "$APP_DIR/.env"
 
 log "Service"
+
+# Which overlays to run. Chosen from what is configured rather than
+# switched on unconditionally: a gateway with no endpoint registry refuses
+# to start, and a unit that always tried would leave systemd restarting a
+# process that can never succeed.
+COMPOSE_FILES="-f docker-compose.yml"
+if [ -f "$APP_DIR/var/webhook-endpoints.json" ]; then
+  COMPOSE_FILES="$COMPOSE_FILES -f docker-compose.gateway.yml"
+  log "  webhook gateway: endpoint registry found, will be started"
+else
+  warn "  webhook gateway: no var/webhook-endpoints.json — not started."
+  warn "    cp deploy/webhook-endpoints.example.json var/webhook-endpoints.json"
+  warn "    chmod 600 var/webhook-endpoints.json   # it refuses anything looser"
+fi
+if grep -q '^TRADINGVIEW_WEBHOOK_SECRET=..' "$APP_DIR/.env" 2>/dev/null; then
+  COMPOSE_FILES="$COMPOSE_FILES -f docker-compose.tradingview.yml"
+  log "  TradingView receiver: secret set, will be started"
+else
+  warn "  TradingView receiver: no TRADINGVIEW_WEBHOOK_SECRET in .env — not started."
+  warn "    openssl rand -hex 24   # then add it to .env"
+fi
+log "  compose files: $COMPOSE_FILES"
+
 install -m 0644 /dev/stdin /etc/systemd/system/index-brain.service <<UNITEOF
 [Unit]
 Description=Index Option Brain
@@ -148,8 +190,13 @@ WorkingDirectory=$APP_DIR
 EnvironmentFile=$APP_DIR/.env
 # Managed by the deploy agent. '-' so a missing file is not a boot failure.
 EnvironmentFile=-/etc/index-brain/managed.env
-ExecStart=/usr/bin/docker compose up --build
-ExecStop=/usr/bin/docker compose down
+# Every overlay, not just the engine. This unit used to run `docker
+# compose up` with no -f, which brings up the `brain` service alone — so a
+# box bootstrapped from this file had the console and none of the webhook
+# gateway, the TradingView receiver or the chat bot. Three of the four
+# processes were simply absent, and nothing said so.
+ExecStart=/usr/bin/docker compose $COMPOSE_FILES up --build
+ExecStop=/usr/bin/docker compose $COMPOSE_FILES down
 Restart=always
 RestartSec=10
 
@@ -171,8 +218,30 @@ mkdir -p /etc/index-brain
 touch /etc/index-brain/managed.env
 chmod 644 /etc/index-brain/managed.env
 
+# The chat bot runs natively rather than in a container: it needs no
+# inbound port at all, and being outside compose means it keeps answering
+# while the stack is rebuilding — which is exactly when you want to be
+# able to ask it what happened.
+if [ -f "$APP_DIR/deploy/index-brain-chat.service" ] && \
+   grep -q '^TELEGRAM_ALLOWED_CHAT_IDS=..' "$APP_DIR/.env" 2>/dev/null; then
+  sed -e "s#/opt/index-option-brain#$APP_DIR#g" -e "s#^User=brain#User=$APP_USER#" \
+      -e "s#^Group=brain#Group=$APP_USER#" \
+      "$APP_DIR/deploy/index-brain-chat.service" \
+      > /etc/systemd/system/index-brain-chat.service
+  log "  chat bot: allowlist set, will be started"
+  CHAT_ENABLED=1
+else
+  warn "  chat bot: no TELEGRAM_ALLOWED_CHAT_IDS in .env — not started."
+  warn "    message the bot once, then read the id it refused from its log"
+  CHAT_ENABLED=0
+fi
+
 systemctl daemon-reload
 systemctl enable --now index-brain.service
+if [ "$CHAT_ENABLED" = "1" ]; then
+  systemctl enable --now index-brain-chat.service 2>/dev/null || \
+    warn "Chat bot did not start; systemctl status index-brain-chat"
+fi
 systemctl enable --now index-brain-update.timer 2>/dev/null || \
   warn "Update timer not installed; deploys will need a manual restart."
 systemctl enable --now index-brain-agent.timer 2>/dev/null || \
@@ -292,6 +361,7 @@ fi
 log "Done"
 cat <<SUMMARYEOF
   app        $APP_DIR (user $APP_USER)
+  preflight  cd $APP_DIR && scripts/preflight.sh --use-env
   service    systemctl status index-brain
   logs       journalctl -u index-brain -f
   updates    pull-based, health-checked, auto-rollback
