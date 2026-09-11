@@ -157,7 +157,13 @@ plan actually sending webhooks**, and **what does TradingView really put in
 the body**. Do this first. If nothing arrives here, no amount of gateway
 debugging will help. RequestBin, Beeceptor and Pipedream do the same job.
 
-**To reach localhost — `cloudflared` or `ngrok`**
+**To reach localhost — `scripts/quick_tunnel.sh`**
+Wraps `cloudflared tunnel --url`, checks the port is actually serving
+first (a tunnel to a dead port answers 502, which looks like Cloudflare's
+fault and is not), and prints the exact webhook URL to paste. No account,
+no DNS, no open port.
+
+**Or by hand — `cloudflared` or `ngrok`**
 `cloudflared tunnel --url http://127.0.0.1:8788` needs no account and
 gives you a 443 hostname. `ngrok http 8788` gives the same plus a request
 inspector at `http://127.0.0.1:4040`, which shows every inbound request

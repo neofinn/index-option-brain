@@ -69,7 +69,8 @@ Three things about that host, all of which bite before anything else
 works.
 
 **Ports 80 and 443 only.** TradingView's documentation says so and no
-setting changes it. The gateway binds 8788, so an alert cannot reach it
+setting changes it. This is also why shared web hosting cannot host this
+system at all — see below. The gateway binds 8788, so an alert cannot reach it
 directly — something must terminate TLS on 443 and forward. Right shape
 anyway: the ingest secret travels in the request *body*, so a plain-HTTP
 hop would put a credential on the wire.
@@ -82,6 +83,29 @@ peer address is then the proxy, so an endpoint's `allowed_ips` list of
 TradingView's egress addresses matches nothing and rejects everything —
 with a 401 that looks exactly like a wrong secret. The gateway logs a
 warning at startup when an allowlist is set and this is not.
+
+### Fastest working URL: no domain, no DNS, no open port
+
+```bash
+python -m index_option_brain.integrations.webhooks    # :8788
+scripts/quick_tunnel.sh                               # prints the URL
+```
+
+A Cloudflare quick tunnel dials **out** from the box, Cloudflare
+terminates TLS on 443, and it prints a hostname TradingView can call
+immediately. No account, no certificate, no firewall change, works behind
+NAT — and crucially, **nothing to do with the domain registrar.**
+
+The script refuses to start if nothing is answering on the port first,
+because a tunnel to a dead port returns 502 and that looks like a
+Cloudflare problem when it is not.
+
+**The hostname changes every restart.** That is the trade: a quick tunnel
+proves the chain works and lets you get an alert template right; it is not
+something to leave running. An alert pointing at a dead `trycloudflare`
+hostname fails silently, and TradingView will only tell you the delivery
+failed — not which of the five links broke. For anything permanent, use
+the named tunnel or Caddy below.
 
 ### The domain: `hooks.neofl.site`
 
@@ -167,6 +191,26 @@ Each failure names the layer, since they look alike from TradingView's
 side: DNS pointing at the old host answers 404, a closed 443 answers
 nothing, a live proxy over a dead gateway answers 502, and a wrong slug
 answers 404 as well.
+
+### Why not shared web hosting
+
+Worth writing down, because "the domain is at Hostinger, can Hostinger run
+it" is the obvious question and the answer is no.
+
+This system is **four long-running Python 3.12 processes** — a poller on a
+20-second loop, two HTTP services, and a Telegram long-poll — plus a
+database and outbound HTTPS. Shared hosting is built for PHP request
+handling: no persistent processes, no root, no systemd, and a worker that
+is killed between requests. Hostinger's own documentation puts Python
+support on VPS only, with no workaround on shared plans.
+
+As of this writing `neofl.site` is served by `dns-parking.com` nameservers
+and answers **HTTP 503**, which is a registered domain with no hosting
+plan behind it. So there is nothing to migrate *from*, and a Hostinger VPS
+would simply be a second VPS alongside the one at `151.243.146.9`.
+
+The domain is still useful — it is where `hooks.neofl.site` points. It is
+the DNS that is needed, not the hosting.
 
 ### Getting a host
 
