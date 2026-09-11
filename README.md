@@ -12,6 +12,28 @@ authoritative; the Execution Gate is mandatory; the LLM/agent layer
 that can never override risk, execution, position limits, or the kill
 switch, and the engine must never require it to exist.
 
+## Start here
+
+One command. It needs Python 3.12+ and nothing else — no VPS, no domain, no
+DNS record, no open port, no root, no Docker, and no paid TradingView plan to
+test with.
+
+```bash
+bash scripts/start_here.sh
+```
+
+It creates the venv, generates credentials, starts the webhook gateway, fetches
+`cloudflared` and opens a tunnel, runs the 22-case end-to-end proof, and then
+prints the URL to paste into a TradingView alert together with the alert body.
+
+Two things it deliberately will not do. It will not print a public URL it has
+not fetched a response through — Cloudflare allocates the hostname before the
+tunnel connects, so on a network that blocks outbound 7844 the URL exists and
+answers 530, and handing you that is worse than saying there isn't one. And the
+relay route it writes is `enabled: false` with a `pull` destination, so a signal
+can arrive and be read but cannot reach a broker until you change that file
+yourself.
+
 ## Status
 
 | Layer | State |

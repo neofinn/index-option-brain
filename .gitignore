@@ -21,3 +21,10 @@ var/*.sqlite
 var/*.sqlite-journal
 var/*.sqlite-wal
 var/*.sqlite-shm
+
+# Runtime state under var/. The credential files in particular: a webhook
+# ingest secret in a public repo is a stranger's order on your account.
+var/webhook-endpoints.json
+var/signal-routes.json
+var/bin/
+var/*.log
