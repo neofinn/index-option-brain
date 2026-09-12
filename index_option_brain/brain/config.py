@@ -84,6 +84,27 @@ class OptionsBrainConfig(_Config):
     skew_scale: float = 3.0
     """IV points of put-minus-call skew that map to a ~0.76 score."""
     max_relative_spread: float = 0.05
+    allow_traded_liquidity_fallback: bool = False
+    """Permit liquidity to be measured from turnover when no book is quoted.
+
+    **Off by default, and that default is a safety property.** A live feed
+    returning no bid or ask is broken or the market is shut, and scoring that
+    chain illiquid is the system refusing to form an intent it cannot act on.
+    Turning this on would let it form one and rely on the Execution Gate alone
+    to stop the order — a weaker posture, one layer instead of two.
+
+    An end-of-day source is the opposite case: NSE's bhavcopy has no book by
+    construction, not by failure, so a replay over it must be able to opt in
+    or it measures nothing. Backtests set this; live configuration does not.
+    """
+    reference_traded_volume: int = 50_000
+    """Contracts traded in a session at which an ATM strike counts as fully
+    liquid, when no book is available to measure a spread from.
+
+    Used only by the traded-volume fallback. A NIFTY ATM strike trades in the
+    millions, so this floor separates a real strike from a dead one rather
+    than grading the live ones against each other.
+    """
     """Relative spread at or below which liquidity scores 1.0."""
     min_strikes: int = 5
 

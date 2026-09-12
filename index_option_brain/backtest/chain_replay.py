@@ -52,6 +52,8 @@ from decimal import Decimal
 
 from index_option_brain.analytics.costs import DEFAULT_COST_MODEL, IndianOptionCostModel
 from index_option_brain.backtest.replay import state_from_bars
+from index_option_brain.brain.config import OptionsBrainConfig
+from index_option_brain.brain.options_brain import DeterministicOptionsBrain
 from index_option_brain.brain.pipeline import QuantitativeBrain
 from index_option_brain.contracts.enums import OrderSide, StrategyType
 from index_option_brain.contracts.instruments import Bar
@@ -190,7 +192,17 @@ class ChainReplayEngine:
     ) -> None:
         self._chains = chains
         self._prices = prices
-        self._brain = brain or QuantitativeBrain()
+        self._brain = brain or QuantitativeBrain(
+            # A bhavcopy has no book, and the Options brain scores an unquoted
+            # chain 0.00 by default -- correct for a live feed, where no book
+            # means the feed is broken. Over EOD history it vetoed every trade
+            # in 90 of 90 decisions, which read as the strategy declining and
+            # was the data shape. The fallback is opted into here and nowhere
+            # else; live configuration leaves it off.
+            options_brain=DeterministicOptionsBrain(
+                OptionsBrainConfig(allow_traded_liquidity_fallback=True)
+            )
+        )
         self._warmup = warmup
         self._hold = hold_sessions
         self._costs = cost_model

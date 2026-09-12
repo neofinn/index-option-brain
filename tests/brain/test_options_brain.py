@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+from index_option_brain.brain.config import OptionsBrainConfig
 from index_option_brain.brain.options_brain import DeterministicOptionsBrain
 from index_option_brain.contracts.enums import OptionType
 from index_option_brain.contracts.market_state import MarketState
@@ -229,3 +230,76 @@ class TestBasis:
             uptrend_state, forward="24064.14", basis="43.74", excess="21.09", strikes=1
         )
         assert brain.analyze(state).basis_score is None
+
+
+class TestTradedLiquidityFallback:
+    """Liquidity from turnover when a source publishes no book.
+
+    The default must stay off. A live feed with no bid or ask is broken or the
+    market is shut, and scoring that chain illiquid is the system declining to
+    form an intent it cannot act on — a layer above the Execution Gate, not
+    instead of it. An end-of-day file is the opposite case: it has no book by
+    construction, and over NSE's bhavcopy this veto turned 90 of 90 replayed
+    decisions into NO_TRADE, which read as the strategy declining.
+    """
+
+    @staticmethod
+    def unquoted(state: MarketState) -> MarketState:
+        stripped = [
+            quote.model_copy(update={"bid": None, "ask": None})
+            for quote in state.options_state.chain
+        ]
+        return state.model_copy(
+            update={
+                "options_state": state.options_state.model_copy(
+                    update={"chain": stripped}
+                )
+            }
+        )
+
+    def test_off_by_default_an_unquoted_chain_is_illiquid(
+        self, uptrend_state: MarketState
+    ) -> None:
+        analysis = brain.analyze(self.unquoted(uptrend_state))
+        assert analysis.liquidity_score == 0.0
+        assert analysis.liquidity_basis == "none"
+
+    def test_opted_in_turnover_is_measured_and_labelled_as_such(
+        self, uptrend_state: MarketState
+    ) -> None:
+        opted = DeterministicOptionsBrain(
+            OptionsBrainConfig(allow_traded_liquidity_fallback=True)
+        )
+        analysis = opted.analyze(self.unquoted(uptrend_state))
+        assert analysis.liquidity_score > 0.0
+        assert analysis.liquidity_basis == "traded"
+
+    def test_a_quoted_chain_still_prefers_the_spread(
+        self, uptrend_state: MarketState
+    ) -> None:
+        """Opting in must not change a source that does have a book."""
+        opted = DeterministicOptionsBrain(
+            OptionsBrainConfig(allow_traded_liquidity_fallback=True)
+        )
+        assert opted.analyze(uptrend_state).liquidity_basis == "spread"
+
+    def test_a_dead_chain_scores_zero_even_opted_in(
+        self, uptrend_state: MarketState
+    ) -> None:
+        """The gate keeps its teeth: an unquoted, untraded strike is still dead."""
+        state = self.unquoted(uptrend_state)
+        dead = [
+            quote.model_copy(update={"volume": 0, "open_interest": 0})
+            for quote in state.options_state.chain
+        ]
+        state = state.model_copy(
+            update={
+                "options_state": state.options_state.model_copy(update={"chain": dead})
+            }
+        )
+        opted = DeterministicOptionsBrain(
+            OptionsBrainConfig(allow_traded_liquidity_fallback=True)
+        )
+        analysis = opted.analyze(state)
+        assert analysis.liquidity_score == 0.0
+        assert analysis.liquidity_basis == "none"

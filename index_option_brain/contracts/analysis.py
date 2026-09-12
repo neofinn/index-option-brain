@@ -110,6 +110,15 @@ class OptionsAnalysis(BaseModel):
     protection is being bid (fear), positive means upside is being chased.
     This is not a richness measure — that is VolatilityAnalysis.iv_score."""
     liquidity_score: float
+    liquidity_basis: str = "spread"
+    """Which measurement `liquidity_score` came from: "spread", "traded", or "none".
+
+    Never inferred from the score. A spread-based 0.9 and a volume-based 0.9
+    are different claims — the first says you can get out at a known price,
+    the second only that others were getting in and out. The Execution Gate
+    refuses a leg with no measurable spread regardless of this score, so a
+    "traded" basis can inform analysis without ever reaching an order.
+    """
     gamma_zones: list[Decimal] = Field(default_factory=list)
     call_walls: list[Decimal] = Field(default_factory=list)
     put_walls: list[Decimal] = Field(default_factory=list)

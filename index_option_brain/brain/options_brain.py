@@ -52,6 +52,7 @@ class DeterministicOptionsBrain(OptionsBrain):
                 oi_structure_score=0.0,
                 iv_score=0.0,
                 liquidity_score=0.0,
+                liquidity_basis="none",
                 confidence=0.0,
                 evidence=[
                     (
@@ -103,7 +104,9 @@ class DeterministicOptionsBrain(OptionsBrain):
         )
         evidence.extend(iv_evidence)
 
-        liquidity_score, liquidity_evidence = self._liquidity(by_strike, window_strikes, cfg)
+        liquidity_score, liquidity_basis, liquidity_evidence = self._liquidity(
+            by_strike, window_strikes, cfg
+        )
         evidence.extend(liquidity_evidence)
 
         strike_concentration = self._strike_concentration(by_strike, strikes)
@@ -122,6 +125,7 @@ class DeterministicOptionsBrain(OptionsBrain):
             oi_structure_score=ind.clamp(structure_score),
             iv_score=ind.clamp(iv_score),
             liquidity_score=ind.clamp(liquidity_score, 0.0, 1.0),
+            liquidity_basis=liquidity_basis,
             gamma_zones=[Decimal(str(z)) for z in gamma_zones],
             call_walls=[Decimal(str(w)) for w in call_walls],
             put_walls=[Decimal(str(w)) for w in put_walls],
@@ -358,16 +362,42 @@ class DeterministicOptionsBrain(OptionsBrain):
         by_strike: dict[float, dict[OptionType, OptionQuote]],
         window: list[float],
         cfg: OptionsBrainConfig,
-    ) -> tuple[float, list[str]]:
-        """Liquidity from relative bid-ask spreads near the money.
+    ) -> tuple[float, str, list[str]]:
+        """Liquidity near the money, and which measurement it came from.
 
-        Spec §29 requires no options entry on an incomplete chain, and §16
-        requires an acceptable spread before any order — both depend on this
-        being measured honestly rather than assumed.
+        Spec §29 requires no options entry on an incomplete chain and §16 an
+        acceptable spread before any order, so this has to be measured rather
+        than assumed.
+
+        Relative bid-ask spread is the right measure and is preferred whenever
+        a book exists. But returning 0.0 when no book exists conflates "the
+        market is illiquid" with "this data source has no book", and those are
+        different facts. End-of-day sources — NSE's bhavcopy, which is the only
+        free historical option chain — publish no bid or ask at all, so every
+        session scored 0.00 and the strategy gate vetoed every trade in a
+        120-session replay. That read as the strategy declining 90 times out of
+        90. It was the data shape, not the strategy.
+
+        So when nothing is quoted two-sided and a caller has opted in via
+        `allow_traded_liquidity_fallback`, liquidity falls back to what did
+        happen: contracts traded and open interest standing, across the ATM
+        window. That is a real measurement of whether a strike transacts — a
+        NIFTY ATM strike trading millions of contracts across a million trades
+        is liquid by any definition, and a dead strike still scores zero.
+
+        What it cannot tell you is the spread you will pay, which is why the
+        basis is returned alongside the score and never folded into it. The
+        Execution Gate refuses any leg whose spread is unmeasurable, so a
+        traded-basis score can inform analysis and still never reach an order.
+        The fallback stays off by default so live behaviour is unchanged: a
+        live feed with no book is broken, and refusing to form the intent at
+        all is a stronger posture than relying on the gate alone.
         """
         relative_spreads: list[float] = []
         quoted = 0
         total = 0
+        volumes: list[float] = []
+        traded = 0
         for strike in window:
             for quote in by_strike.get(strike, {}).values():
                 total += 1
@@ -375,25 +405,55 @@ class DeterministicOptionsBrain(OptionsBrain):
                 if relative is not None:
                     quoted += 1
                     relative_spreads.append(float(relative))
+                volumes.append(float(quote.volume))
+                if quote.volume > 0 or quote.open_interest > 0:
+                    traded += 1
 
-        if not relative_spreads:
-            return 0.0, ["No two-sided quotes in the ATM window — treat the chain as illiquid"]
+        if relative_spreads:
+            median_spread = sorted(relative_spreads)[len(relative_spreads) // 2]
+            spread_score = ind.clamp(
+                1.0 - (median_spread / cfg.max_relative_spread), 0.0, 1.0
+            )
+            quote_coverage = quoted / total if total else 0.0
+            score = spread_score * quote_coverage
+            evidence = [
+                (
+                    f"Median relative spread {median_spread * 100:.2f}% "
+                    f"on {quoted}/{total} quoted contracts near ATM"
+                )
+            ]
+            if score < 0.35:
+                evidence.append("Liquidity is poor — slippage risk dominates any edge here")
+            return score, "spread", evidence
 
-        median_spread = sorted(relative_spreads)[len(relative_spreads) // 2]
-        spread_score = ind.clamp(
-            1.0 - (median_spread / cfg.max_relative_spread), 0.0, 1.0
-        )
-        quote_coverage = quoted / total if total else 0.0
-        score = spread_score * quote_coverage
+        if not cfg.allow_traded_liquidity_fallback:
+            return 0.0, "none", [
+                "No two-sided quotes in the ATM window — treat the chain as illiquid"
+            ]
+
+        if not total:
+            return 0.0, "none", ["No contracts in the ATM window — nothing to measure"]
+
+        if not volumes or max(volumes) <= 0:
+            return 0.0, "none", [
+                "No two-sided quotes and nothing traded near ATM — the chain is illiquid"
+            ]
+
+        median_volume = sorted(volumes)[len(volumes) // 2]
+        depth = ind.clamp(median_volume / float(cfg.reference_traded_volume), 0.0, 1.0)
+        coverage = traded / total
+        score = depth * coverage
         evidence = [
             (
-                f"Median relative spread {median_spread * 100:.2f}% "
-                f"on {quoted}/{total} quoted contracts near ATM"
-            )
+                f"No two-sided quotes near ATM; liquidity measured from turnover "
+                f"instead — median {median_volume:,.0f} contracts traded on "
+                f"{traded}/{total} active strikes"
+            ),
+            "Spread is unmeasured on this source, so slippage is not modelled here",
         ]
         if score < 0.35:
-            evidence.append("Liquidity is poor — slippage risk dominates any edge here")
-        return score, evidence
+            evidence.append("Turnover is thin — slippage risk dominates any edge here")
+        return score, "traded", evidence
 
     def _strike_concentration(
         self,
