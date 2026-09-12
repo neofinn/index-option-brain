@@ -28,3 +28,6 @@ var/webhook-endpoints.json
 var/signal-routes.json
 var/bin/
 var/*.log
+
+# NSE bhavcopy cache — ~1MB per session, refetchable, not source.
+var/bhavcopy/

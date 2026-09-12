@@ -39,6 +39,15 @@ class HttpResponse:
     status_code: int
     text: str
     headers: Mapping[str, str] = field(default_factory=dict)
+    content: bytes = b""
+    """The raw body, for payloads that are not text.
+
+    NSE publishes its F&O bhavcopy — the only free historical option chain —
+    as a ZIP, and `text` on a ZIP is mojibake that silently parses to nothing.
+    Defaults to empty rather than being derived from `text`, because a
+    recorded text fixture has no faithful byte form and inventing one would
+    make a decoding bug untestable.
+    """
 
     @property
     def is_ok(self) -> bool:
@@ -151,6 +160,7 @@ class HttpxSession:
             status_code=response.status_code,
             text=response.text,
             headers=dict(response.headers),
+            content=response.content,
         )
 
     async def post(
