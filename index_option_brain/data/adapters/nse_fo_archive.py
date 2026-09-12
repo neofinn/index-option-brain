@@ -360,6 +360,39 @@ class NseFoArchiveAdapter:
         body = unzip_bhavcopy(payload, day=day)
         return parse_bhavcopy(body, underlying=underlying, day=day, expiry=expiry)
 
+    async def get_price_map(
+        self, underlying: str, day: date
+    ) -> dict[tuple[date, Decimal, OptionType], Decimal] | None:
+        """Settlement price of every `underlying` option that traded on `day`.
+
+        Keyed across **all** expiries, not just the nearest, because this is
+        what prices an exit: a structure opened against the 15 Sep expiry is
+        closed on some later session when that expiry is no longer the front
+        one. `get_option_chain` deliberately returns a single expiry, and using
+        it to price exits would silently drop every trade held past a roll.
+
+        `None` for a session NSE did not publish.
+        """
+        payload = await self.fetch_raw(day)
+        if payload is None:
+            return None
+        symbol = underlying.strip().upper()
+        prices: dict[tuple[date, Decimal, OptionType], Decimal] = {}
+        body = unzip_bhavcopy(payload, day=day)
+        for row in csv.DictReader(io.StringIO(body)):
+            if (row.get("TckrSymb") or "").strip().upper() != symbol:
+                continue
+            opt = (row.get("OptnTp") or "").strip().upper()
+            if opt not in _OPTION_TYPES:
+                continue
+            expiry = _date(row.get("XpryDt"))
+            strike = _decimal(row.get("StrkPric"))
+            settle = _decimal(row.get("SttlmPric")) or _decimal(row.get("ClsPric"))
+            if expiry is None or strike is None or settle is None:
+                continue
+            prices[(expiry, strike, _OPTION_TYPES[opt])] = settle
+        return prices
+
     async def get_many_option_chains(
         self,
         underlying: str,
