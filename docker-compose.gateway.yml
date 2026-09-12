@@ -1,0 +1,61 @@
+# The webhook-to-API gateway, as an overlay on docker-compose.yml.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.gateway.yml up -d
+#
+# Bound to LOOPBACK, not published. TradingView calls webhooks on ports 80
+# and 443 only, so publishing 8788 on a public interface would not help it
+# reach this anyway — and the ingest secret travels in the request body, so
+# a plain-HTTP hop would put a credential on the wire.
+#
+# Something must terminate TLS on 443 in front:
+#   deploy/Caddyfile              a domain pointing here, ports 80+443 open
+#   deploy/cloudflared-config.yml no public IP, no open ports, no DNS
+#
+# Then set WEBHOOK_TRUST_FORWARDED_FOR=1, or every request's peer address
+# is the proxy and an endpoint's IP allowlist rejects everything with a 401
+# that looks exactly like a wrong secret.
+#
+# It is a separate container from `brain` because the brain holds broker
+# credentials and sits behind Tailscale, and nothing about it should change
+# to accommodate inbound webhooks.
+
+services:
+  gateway:
+    build: .
+    image: index-option-brain:local
+    container_name: index-brain-gw
+    restart: unless-stopped
+    command: ["python", "-m", "index_option_brain.integrations.webhooks"]
+    ports:
+      # Loopback. The reverse proxy on the host reaches this; the internet
+      # does not.
+      - "127.0.0.1:8788:8788"
+    env_file:
+      - .env
+    environment:
+      WEBHOOK_ENDPOINTS_FILE: /app/var/webhook-endpoints.json
+      WEBHOOK_GATEWAY_PORT: ${WEBHOOK_GATEWAY_PORT:-8788}
+      # Required behind a proxy or tunnel, which for TradingView is
+      # always. See the note at the top of this file.
+      WEBHOOK_TRUST_FORWARDED_FOR: ${WEBHOOK_TRUST_FORWARDED_FOR:-1}
+      BAR_STORE_DIR: ""
+    read_only: true
+    tmpfs:
+      - /tmp
+    volumes:
+      # The database and the endpoint registry. Shared with the brain
+      # container: on SQLite the two writers are serialised by a file
+      # lock, which is why Database sets a busy timeout.
+      - ./var:/app/var
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8788/health').read()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"

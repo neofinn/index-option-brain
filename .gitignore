@@ -1,0 +1,33 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.env
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.log
+.DS_Store
+
+# Captured observations: the corpus is per-deployment runtime data, and the
+# chain table grows without bound. It belongs on the box, not in the repo.
+var/*.sqlite
+var/*.sqlite-journal
+var/*.sqlite-wal
+var/*.sqlite-shm
+
+# Runtime state under var/. The credential files in particular: a webhook
+# ingest secret in a public repo is a stranger's order on your account.
+var/webhook-endpoints.json
+var/signal-routes.json
+var/bin/
+var/*.log
+
+# NSE bhavcopy cache — ~1MB per session, refetchable, not source.
+var/bhavcopy/

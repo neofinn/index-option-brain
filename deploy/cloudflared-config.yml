@@ -1,0 +1,61 @@
+# Cloudflare Tunnel in front of the webhook gateway.
+#
+# THE PATH TO TAKE WHEN YOU HAVE NO PUBLIC IP, NO OPEN PORTS AND NO DNS.
+# The tunnel dials out from the machine, so nothing has to be reachable
+# from the internet and no firewall rule changes. Cloudflare terminates
+# TLS on 443, which is the port TradingView insists on.
+#
+# ---------------------------------------------------------------------
+# FASTEST TEST — no account, no config file, one command:
+#
+#   cloudflared tunnel --url http://127.0.0.1:8788
+#
+# It prints a URL like https://random-words-1234.trycloudflare.com and
+# your webhook URL is that plus /hook/<slug>. Good enough to prove the
+# whole chain works today.
+#
+# The URL CHANGES EVERY RESTART. A quick tunnel is for testing: the
+# TradingView alert has to be edited each time, and an alert pointing at
+# a dead hostname fails silently from the chart's side. Use the named
+# tunnel below for anything you intend to leave running.
+# ---------------------------------------------------------------------
+#
+# NAMED TUNNEL — stable hostname, survives restarts:
+#
+#   cloudflared tunnel login
+#   cloudflared tunnel create index-brain
+#   cloudflared tunnel route dns index-brain hooks.neofl.site
+#   sudo cp deploy/cloudflared-config.yml /etc/cloudflared/config.yml
+#   # edit the two IDs below to match `cloudflared tunnel list`
+#   sudo cloudflared service install
+#
+# Then set on the gateway, because behind a tunnel every request's peer
+# address is the tunnel:
+#
+#   WEBHOOK_TRUST_FORWARDED_FOR=1
+#
+# and either keep TradingView's egress addresses in the endpoint's
+# allowed_ips (they arrive in X-Forwarded-For, which cloudflared sets), or
+# clear the list and let the ingest secret be the only credential.
+
+tunnel: REPLACE_WITH_TUNNEL_ID
+credentials-file: /etc/cloudflared/REPLACE_WITH_TUNNEL_ID.json
+
+# Keep the connection warm; a cold dial adds seconds to the first webhook
+# after an idle period, and TradingView does not retry a timeout.
+originRequest:
+  connectTimeout: 5s
+  keepAliveConnections: 4
+  keepAliveTimeout: 90s
+
+ingress:
+  # The webhook path only. Publishing the whole gateway through the tunnel
+  # would put the read API and the operator page on the public internet
+  # behind nothing but a token that gets pasted into browsers and EAs.
+  - hostname: hooks.neofl.site
+    path: /hook/*
+    service: http://127.0.0.1:8788
+
+  # Everything else at this hostname is refused. The read API stays on the
+  # tailnet, where the console already lives.
+  - service: http_status:404

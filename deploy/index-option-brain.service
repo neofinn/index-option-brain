@@ -1,0 +1,58 @@
+# systemd unit for a bare-metal or VPS install (no Docker).
+#
+#   sudo cp deploy/index-option-brain.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now index-option-brain
+#
+# Assumes the repo at /opt/index-option-brain with a virtualenv at .venv,
+# owned by a dedicated `brain` user. See deploy/README.md.
+
+[Unit]
+Description=Index Option Brain — engine and operations console
+Documentation=https://github.com/neofinn/index-option-brain
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=brain
+Group=brain
+WorkingDirectory=/opt/index-option-brain
+EnvironmentFile=/opt/index-option-brain/.env
+
+# Bound to loopback on purpose. Tailscale serve is the only way in, so the
+# console is never listening on a public interface even for a moment.
+ExecStart=/opt/index-option-brain/.venv/bin/uvicorn \
+    index_option_brain.app.main:app \
+    --host 127.0.0.1 --port 8000 --workers 1 \
+    --proxy-headers --forwarded-allow-ips '*'
+
+# Always come back. A restart loses the bars observed since the last start,
+# which is the real cost of a crash here — hence RestartSec being long enough
+# not to thrash against a rate-limited feed.
+Restart=always
+RestartSec=15s
+
+# Hardening. This process will hold broker credentials.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+# Outbound HTTPS only; it never needs to listen on anything but loopback.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+ReadWritePaths=/opt/index-option-brain/var
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=index-brain
+
+[Install]
+WantedBy=multi-user.target

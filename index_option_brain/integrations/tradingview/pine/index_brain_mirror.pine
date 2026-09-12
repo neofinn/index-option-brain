@@ -1,0 +1,673 @@
+//@version=6
+// =====================================================================
+// INDEX BRAIN — spec §5 on the chart, plus everything a chart cannot see
+//
+// TWO HALVES, AND THEY ARE DIFFERENT KINDS OF THING
+//
+// 1. COMPUTED HERE. The whole Index brain is OHLC arithmetic, so it is
+//    reproduced line for line from index_option_brain/brain/indicators.py.
+//    Where Pine's built-in differs from the engine's function, the engine
+//    wins and the built-in is not used:
+//      * EMA is seeded with the FIRST OBSERVATION of the window, not with
+//        an SMA of the first `period` bars the way ta.ema seeds it. An
+//        EMA50 still carries ~9% of its seed after 60 bars.
+//      * RSI is Cutler's (simple averages), NOT Wilder's ta.rsi.
+//      * ATR is a simple mean of true ranges, not Wilder's smoothing.
+//      * The breakout range EXCLUDES the live bar. A range that includes
+//        the bar being tested moves with price and nothing ever breaks.
+//    Change a constant here and change IndexBrainConfig too, or the chart
+//    starts arguing with the engine.
+//
+// 2. TRANSPORTED. Breadth needs fifty quotes and their weights. Open
+//    interest, implied volatility, the parity forward and the volatility
+//    risk premium need the option chain. Pine can fetch none of it, so
+//    these are PASTED IN from `GET /api/chartfeed/NIFTY` and rendered
+//    with their age. A stale feed goes red and its values are withheld —
+//    an old max pain drawn as a fresh line is worse than no line.
+//
+// WHAT THIS DOES NOT DO
+// It does not authorize a trade, and it will not draw one. Entry, stop
+// and target levels appear only when the pasted feed says the engine
+// authorized something; with auth=0 the panel names what is blocking
+// instead. A chart cannot run the Execution Gate, price a spread, or
+// size against an account, and a box on a chart that looks like an
+// authorized trade is the single most expensive thing this file could
+// get wrong.
+//
+// SETUP
+//   1. Add to a NIFTY or BANKNIFTY chart (any timeframe; the brain block
+//      runs on daily via request.security, matching the engine).
+//   2. Paste the line from /api/chartfeed/NIFTY into "Engine feed".
+//   3. For webhooks: set the shared secret, tick "Emit webhook alerts",
+//      then create ONE alert with condition "Any alert() function call",
+//      your webhook URL, and an EMPTY message box. alert() does not
+//      substitute {{placeholders}}, so this file builds the JSON itself.
+//
+// THE SECRET is an indicator input: anyone you share this chart with, and
+// any screenshot of the settings dialog, has it. Use one dedicated to
+// this indicator and rotate it when you share a layout.
+// =====================================================================
+
+indicator("Index Brain", shorttitle="IdxBrain", overlay=true, max_bars_back=500, max_lines_count=200, max_labels_count=200, max_boxes_count=200)
+
+// ------------------------- inputs: IndexBrainConfig -------------------
+grpCfg = "Brain config (must match IndexBrainConfig)"
+emaFast      = input.int(20,   "ema_fast",              group=grpCfg, minval=2)
+emaSlow      = input.int(50,   "ema_slow",              group=grpCfg, minval=2)
+slopePeriod  = input.int(20,   "slope_period",          group=grpCfg, minval=2)
+rsiPeriod    = input.int(14,   "rsi_period",            group=grpCfg, minval=2)
+atrPeriod    = input.int(14,   "atr_period",            group=grpCfg, minval=2)
+rocPeriod    = input.int(10,   "roc_period",            group=grpCfg, minval=1)
+swingLb      = input.int(2,    "swing_lookback",        group=grpCfg, minval=1)
+breakoutLb   = input.int(20,   "breakout_lookback",     group=grpCfg, minval=2)
+emaSepScale  = input.float(0.02,  "ema_separation_scale", group=grpCfg, step=0.001)
+slopeAtrScale= input.float(0.35,  "slope_atr_scale",     group=grpCfg, step=0.01)
+rocScale     = input.float(0.02,  "roc_scale",           group=grpCfg, step=0.001)
+breakoutBuf  = input.float(0.15,  "breakout_buffer_atr", group=grpCfg, step=0.01)
+dirThreshold = input.float(0.25,  "direction_threshold", group=grpCfg, step=0.01)
+minDailyBars = input.int(30,   "min_daily_bars",        group=grpCfg, minval=1)
+histWindow   = input.int(90,   "daily bars the engine loads", group=grpCfg, minval=60, maxval=400, tooltip="The EMA seed and the ATR percentile both depend on how much history the engine holds. Set this to daily_history_bars.")
+
+grpVol = "Realized volatility"
+rvWindow = input.int(20, "window (bars)", group=grpVol, minval=8, maxval=200)
+
+grpOr = "Opening range"
+orMinutes = input.int(15, "minutes", group=grpOr, minval=1)
+
+// ------------------------- engine feed --------------------------------
+grpFeed = "Engine feed"
+feedRaw   = input.string("", "Paste from /api/chartfeed/NIFTY", group=grpFeed, tooltip="One line carrying breadth, OI, IV, the parity forward and the VRP — everything Pine cannot compute. Refresh it when you want those panels current.")
+feedMaxAge= input.int(30, "Stale after (minutes)", group=grpFeed, minval=1, tooltip="Past this the feed is drawn red and its values are withheld. An old max pain drawn as a fresh line is worse than no line.")
+
+// ------------------------- display ------------------------------------
+grpShow = "Display"
+showPanel   = input.bool(true,  "Dashboard",              group=grpShow)
+showLevels  = input.bool(true,  "Levels + price labels",  group=grpShow)
+showZones   = input.bool(true,  "Supply / demand zones",  group=grpShow)
+showEm      = input.bool(true,  "Expected-move band",     group=grpShow)
+showBreaks  = input.bool(true,  "Break markers",          group=grpShow)
+showRibbon  = input.bool(true,  "EMA ribbon + VWAP",      group=grpShow)
+tintBg      = input.bool(true,  "Tint background by direction", group=grpShow)
+panelPos    = input.string("Top right", "Dashboard position", options=["Top right", "Middle right", "Bottom right", "Bottom left"], group=grpShow)
+
+// ------------------------- alerts -------------------------------------
+grpAlert = "Webhook"
+alertsOn  = input.bool(false, "Emit webhook alerts", group=grpAlert)
+tvSecret  = input.string("", "Shared secret", group=grpAlert, tooltip="Must match TRADINGVIEW_WEBHOOK_SECRET on the receiver. Visible to anyone you share this chart with.")
+fireBreak = input.bool(true,  "Breakout / breakdown",           group=grpAlert)
+fireSr    = input.bool(true,  "Support / resistance test",      group=grpAlert)
+fireVwap  = input.bool(true,  "VWAP crossing",                  group=grpAlert)
+fireVol   = input.bool(true,  "Volatility expansion/contraction", group=grpAlert)
+fireOr    = input.bool(true,  "Opening range break",            group=grpAlert)
+fireFlip  = input.bool(true,  "Composite direction flip",       group=grpAlert)
+
+// ------------------------- palette ------------------------------------
+cBull   = #26a69a
+cBear   = #ef5350
+cNeutral= #787b86
+cInk    = #d1d4dc
+cPanel  = #131722
+cAccent = #f7a600
+cDim    = #5d606b
+
+// ================= indicators.py, transliterated ======================
+
+// indicators.squash — tanh is not a Pine builtin.
+f_tanh(float x) =>
+    float z = math.max(math.min(x, 20.0), -20.0)
+    float e = math.exp(2.0 * z)
+    (e - 1.0) / (e + 1.0)
+
+f_squash(float v, float scale) =>
+    scale <= 0.0 ? 0.0 : f_tanh(v / scale)
+
+f_clamp(float v, float lo, float hi) =>
+    math.max(lo, math.min(hi, v))
+
+// indicators.ema_series: seeded with the first observation of the window.
+f_ema_window(float src, int period, int n) =>
+    float k = 2.0 / (period + 1.0)
+    float e = src[n - 1]
+    for j = 1 to n - 1
+        e := src[n - 1 - j] * k + e * (1.0 - k)
+    e
+
+// indicators.rsi: Cutler's, simple averages. Not ta.rsi.
+f_rsi_cutler(float src, int period) =>
+    float gains = 0.0
+    float losses = 0.0
+    for j = 0 to period - 1
+        float d = src[j] - src[j + 1]
+        gains := gains + math.max(d, 0.0)
+        losses := losses + math.max(-d, 0.0)
+    float ag = gains / period
+    float al = losses / period
+    al == 0.0 ? (ag > 0.0 ? 100.0 : 50.0) : 100.0 - 100.0 / (1.0 + ag / al)
+
+// indicators.atr: mean of true ranges, not Wilder's.
+f_atr_simple(int period) =>
+    ta.sma(ta.tr, period)
+
+// indicators.linreg_slope: price units per bar, forward in time.
+f_slope(float src, int n) =>
+    ta.linreg(src, n, 0) - ta.linreg(src, n, 1)
+
+// indicators.rate_of_change: fractional, 0.01 == +1%.
+f_roc(float src, int period) =>
+    float past = src[period]
+    past == 0.0 ? float(na) : (src - past) / past
+
+// indicators.percentile_rank over the ATR's own history, current included.
+f_pctrank(float src, int n) =>
+    int atOrBelow = 0
+    for j = 0 to n - 1
+        if src[j] <= src
+            atOrBelow := atOrBelow + 1
+    atOrBelow / float(n)
+
+// indicators.blend: weighted mean over the components that are present,
+// remaining weights renormalized. A missing component is dropped, never
+// scored as zero.
+f_blend3(float a, float wa, float b, float wb, float c, float wc) =>
+    float num = 0.0
+    float den = 0.0
+    if not na(a) and wa > 0.0
+        num := num + a * wa
+        den := den + wa
+    if not na(b) and wb > 0.0
+        num := num + b * wb
+        den := den + wb
+    if not na(c) and wc > 0.0
+        num := num + c * wc
+        den := den + wc
+    den <= 0.0 ? float(na) : num / den
+
+// indicators.alignment: 1.0 when every present score points the same way.
+f_alignment(float a, float b, float c) =>
+    float total = 0.0
+    float mag = 0.0
+    if not na(a)
+        total := total + a
+        mag := mag + math.abs(a)
+    if not na(b)
+        total := total + b
+        mag := mag + math.abs(b)
+    if not na(c)
+        total := total + c
+        mag := mag + math.abs(c)
+    mag == 0.0 ? 0.0 : math.abs(total) / mag
+
+// ================= the daily brain block ==============================
+// Runs on daily bars because that is what the engine reads. On the
+// forming daily bar this is the live session, matching the engine
+// appending the live spot to its daily closes.
+
+f_daily_brain() =>
+    float atrV = f_atr_simple(atrPeriod)
+
+    // --- trend: EMA separation, location vs slow EMA, regression slope
+    float eFast = f_ema_window(close, emaFast, histWindow)
+    float eSlow = f_ema_window(close, emaSlow, histWindow)
+    float sepScore = na(eFast) or na(eSlow) or eSlow == 0.0 ? float(na) : f_squash((eFast - eSlow) / eSlow, emaSepScale)
+    float locScore = na(eSlow) or na(atrV) or atrV == 0.0 ? float(na) : f_squash((close - eSlow) / atrV, 2.0)
+    float slopeV = f_slope(close, slopePeriod)
+    float slopeScore = na(slopeV) or na(atrV) or atrV == 0.0 ? float(na) : f_squash(slopeV / atrV, slopeAtrScale)
+    float trendScore = f_blend3(sepScore, 0.4, locScore, 0.25, slopeScore, 0.35)
+
+    // --- structure: last two confirmed swing highs and swing lows
+    float ph = ta.pivothigh(high, swingLb, swingLb)
+    float pl = ta.pivotlow(low, swingLb, swingLb)
+    float ph1 = ta.valuewhen(not na(ph), ph, 0)
+    float ph2 = ta.valuewhen(not na(ph), ph, 1)
+    float pl1 = ta.valuewhen(not na(pl), pl, 0)
+    float pl2 = ta.valuewhen(not na(pl), pl, 1)
+    float sParts = 0.0
+    int sCount = 0
+    if not na(ph1) and not na(ph2)
+        sParts := sParts + (ph1 > ph2 ? 1.0 : -1.0)
+        sCount := sCount + 1
+    if not na(pl1) and not na(pl2)
+        sParts := sParts + (pl1 > pl2 ? 1.0 : -1.0)
+        sCount := sCount + 1
+    float structScore = sCount == 0 ? float(na) : sParts / sCount
+
+    // --- momentum: rate of change, Cutler RSI recentred
+    // The engine's third momentum component is an intraday regression and
+    // is not computable from daily bars, so it is absent here rather than
+    // approximated. blend() renormalizes over what is present, which is
+    // the same arithmetic the engine performs on a session with too few
+    // intraday bars.
+    float rocV = f_roc(close, rocPeriod)
+    float rocScore = na(rocV) ? float(na) : f_squash(rocV, rocScale)
+    float rsiV = f_rsi_cutler(close, rsiPeriod)
+    float rsiScore = na(rsiV) ? float(na) : f_clamp((rsiV - 50.0) / 30.0, -1.0, 1.0)
+    float momScore = f_blend3(rocScore, 0.4, rsiScore, 0.3, float(na), 0.3)
+
+    // --- volatility: ATR's own percentile, a magnitude not a direction
+    float volRank = na(atrV) ? float(na) : f_pctrank(atrV, histWindow)
+
+    // --- breakout, with the live bar excluded from the range
+    float rangeHigh = ta.highest(high[1], breakoutLb)
+    float rangeLow = ta.lowest(low[1], breakoutLb)
+    float buf = na(atrV) ? float(na) : atrV * breakoutBuf
+    int bstate = 0
+    if not na(buf)
+        if close > rangeHigh + buf
+            bstate := 1
+        else if close < rangeLow - buf
+            bstate := 2
+        else if high > rangeHigh + buf and close < rangeHigh
+            bstate := 3
+        else if low < rangeLow - buf and close > rangeLow
+            bstate := 4
+
+    // --- composite and confidence
+    float composite = f_blend3(trendScore, 0.4, structScore, 0.3, momScore, 0.3)
+    composite := na(composite) ? 0.0 : composite
+    int dir = composite >= dirThreshold ? 1 : composite <= -dirThreshold ? -1 : 0
+
+    float agreement = f_alignment(trendScore, structScore, momScore)
+    float magSum = 0.0
+    int present = 0
+    if not na(trendScore)
+        magSum := magSum + math.abs(trendScore)
+        present := present + 1
+    if not na(structScore)
+        magSum := magSum + math.abs(structScore)
+        present := present + 1
+    if not na(momScore)
+        magSum := magSum + math.abs(momScore)
+        present := present + 1
+    float strength = present == 0 ? 0.0 : magSum / present
+    float sufficiency = math.min(1.0, math.min(bar_index + 1, histWindow) / float(minDailyBars))
+    float completeness = present / 3.0
+    // The engine multiplies by 0.85 when it has too few intraday bars. A
+    // daily-only computation is exactly that case, so the factor is
+    // applied rather than quietly dropped.
+    float confidence = present == 0 ? 0.0 : f_clamp(agreement * (0.35 + 0.65 * strength) * sufficiency * completeness * 0.85, 0.0, 1.0)
+
+    // --- realized volatility, matching analytics/realized.py
+    // A window of N bars yields N-1 return pairs and the variance divides
+    // by (N-1)-1. Getting this off by one makes the engine and the chart
+    // disagree by tenths of a percent for no visible reason.
+    int nRet = rvWindow - 1
+    float ccTotal = 0.0
+    for j = 0 to nRet - 1
+        ccTotal := ccTotal + math.log(close[j] / close[j + 1])
+    float ccMean = ccTotal / nRet
+    float ccSs = 0.0
+    for j = 0 to nRet - 1
+        float r = math.log(close[j] / close[j + 1]) - ccMean
+        ccSs := ccSs + r * r
+    float ccVol = math.sqrt(ccSs / (nRet - 1) * 252.0) * 100.0
+
+    float onTotal = 0.0
+    float ocTotal = 0.0
+    float rsSum = 0.0
+    for j = 0 to nRet - 1
+        onTotal := onTotal + math.log(open[j] / close[j + 1])
+        ocTotal := ocTotal + math.log(close[j] / open[j])
+        rsSum := rsSum + math.log(high[j] / close[j]) * math.log(high[j] / open[j]) + math.log(low[j] / close[j]) * math.log(low[j] / open[j])
+    float onMean = onTotal / nRet
+    float ocMean = ocTotal / nRet
+    float onSs = 0.0
+    float ocSs = 0.0
+    for j = 0 to nRet - 1
+        float a = math.log(open[j] / close[j + 1]) - onMean
+        float b = math.log(close[j] / open[j]) - ocMean
+        onSs := onSs + a * a
+        ocSs := ocSs + b * b
+    float kYz = 0.34 / (1.34 + (nRet + 1.0) / (nRet - 1.0))
+    float yzVar = onSs / (nRet - 1) + kYz * (ocSs / (nRet - 1)) + (1.0 - kYz) * (rsSum / nRet)
+    float yzVol = math.sqrt(math.max(yzVar, 0.0) * 252.0) * 100.0
+
+    float prevHigh = high[1]
+    float prevLow = low[1]
+    float prevClose = close[1]
+    float gapPct = prevClose == 0.0 ? float(na) : (open - prevClose) / prevClose * 100.0
+
+    [composite, dir, confidence, trendScore, structScore, momScore, atrV, volRank, bstate, rangeHigh, rangeLow, eFast, eSlow, rsiV, ccVol, yzVol, ph1, pl1, prevHigh, prevLow, prevClose, gapPct, ph2, pl2]
+
+[dComposite, dDir, dConf, dTrend, dStruct, dMom, dAtr, dVolRank, dBstate, dRangeHigh, dRangeLow, dEmaFast, dEmaSlow, dRsi, dCcVol, dYzVol, dPivotHigh, dPivotLow, dPrevHigh, dPrevLow, dPrevClose, dGapPct, dPivotHigh2, dPivotLow2] = request.security(syminfo.tickerid, "D", f_daily_brain(), lookahead=barmerge.lookahead_off)
+
+// ================= the intraday block =================================
+// Session VWAP and the opening range on the chart's own timeframe,
+// matching the engine's intraday bars. On a daily chart these are empty
+// rather than wrong.
+bool intraday = timeframe.isintraday
+float sessVwap = intraday ? ta.vwap(hlc3) : float(na)
+float vwapDistAtr = na(sessVwap) or na(dAtr) or dAtr == 0.0 ? float(na) : (close - sessVwap) / dAtr
+
+var float orHigh = na
+var float orLow = na
+var bool orDone = false
+bool newSession = ta.change(time("D")) != 0
+if newSession
+    orHigh := high
+    orLow := low
+    orDone := false
+else if intraday and not orDone
+    int minsIn = int((time - time("D")) / 60000)
+    if minsIn <= orMinutes
+        orHigh := math.max(nz(orHigh, high), high)
+        orLow := math.min(nz(orLow, low), low)
+    else
+        orDone := true
+
+// ================= the engine feed ====================================
+// Pine has no regular expressions and no HTTP. The feed is therefore
+// parsed with str.split and read strictly: an unknown version, a symbol
+// that is not this chart's, or an age past the window all withhold the
+// values rather than rendering them. Half-parsing a malformed paste into
+// plausible numbers is the failure worth designing against — a wrong max
+// pain looks exactly like a right one.
+
+f_feed_field(string feed, string key) =>
+    string out = na
+    if str.length(feed) > 0
+        array<string> parts = str.split(feed, "|")
+        string want = key + "="
+        int wl = str.length(want)
+        for i = 0 to array.size(parts) - 1
+            string p = array.get(parts, i)
+            if str.length(p) > wl and str.substring(p, 0, wl) == want
+                out := str.substring(p, wl)
+    out
+
+f_feed_num(string feed, string key) =>
+    string raw = f_feed_field(feed, key)
+    na(raw) ? float(na) : str.tonumber(raw)
+
+// The first entry of a comma-separated level list — the nearest wall.
+f_feed_first(string feed, string key) =>
+    string raw = f_feed_field(feed, key)
+    float out = na
+    if not na(raw)
+        array<string> xs = str.split(raw, ",")
+        if array.size(xs) > 0
+            out := str.tonumber(array.get(xs, 0))
+    out
+
+f_feed_part(string feed, int index) =>
+    string out = na
+    if str.length(feed) > 0
+        array<string> parts = str.split(feed, "|")
+        if array.size(parts) > index
+            out := array.get(parts, index)
+    out
+
+f_feed_time(string feed) =>
+    int out = na
+    string t = f_feed_part(feed, 1)
+    if not na(t) and str.length(t) >= 19
+        out := timestamp("UTC", int(str.tonumber(str.substring(t, 0, 4))), int(str.tonumber(str.substring(t, 5, 7))), int(str.tonumber(str.substring(t, 8, 10))), int(str.tonumber(str.substring(t, 11, 13))), int(str.tonumber(str.substring(t, 14, 16))), int(str.tonumber(str.substring(t, 17, 19))))
+    out
+
+string feed        = str.replace_all(feedRaw, " ", "")
+string feedVersion = f_feed_part(feed, 0)
+string feedSymbol  = f_feed_part(feed, 2)
+int    feedTime    = f_feed_time(feed)
+float  feedAgeMin  = na(feedTime) ? float(na) : (timenow - feedTime) / 60000.0
+
+bool feedPresent   = str.length(feed) > 0
+bool feedVersionOk = feedVersion == "v1"
+// syminfo.ticker is "NIFTY" for NSE:NIFTY, which is what the engine calls
+// it. A feed for the other index on this chart is refused rather than
+// rendered: a BANKNIFTY max pain over a NIFTY chart is a plausible number
+// in the wrong place, which is the hardest kind of error to notice.
+bool feedSymbolOk  = na(feedSymbol) ? false : str.contains(syminfo.ticker, feedSymbol) or str.contains(feedSymbol, syminfo.ticker)
+bool feedFresh     = not na(feedAgeMin) and feedAgeMin <= feedMaxAge and feedAgeMin >= -5
+bool feedOk        = feedPresent and feedVersionOk and feedSymbolOk and feedFresh
+
+string feedStatus = not feedPresent ? "not pasted" : not feedVersionOk ? "unknown version" : not feedSymbolOk ? "wrong symbol" : na(feedAgeMin) ? "unreadable time" : feedAgeMin < 0 ? "dated ahead" : feedAgeMin > feedMaxAge ? "STALE " + str.tostring(feedAgeMin, "#") + "m" : str.tostring(feedAgeMin, "#") + "m old"
+color  feedColor  = feedOk ? cBull : feedPresent ? cBear : cDim
+
+// Values are read only when the feed is usable. Reading them regardless
+// and hiding them in the panel would still leave them driving the lines.
+float fMaxPain = feedOk ? f_feed_num(feed, "mp") : float(na)
+float fCallWall= feedOk ? f_feed_first(feed, "cw") : float(na)
+float fPutWall = feedOk ? f_feed_first(feed, "pw") : float(na)
+float fPcr     = feedOk ? f_feed_num(feed, "pcr") : float(na)
+float fIv      = feedOk ? f_feed_num(feed, "iv") : float(na)
+float fIvp     = feedOk ? f_feed_num(feed, "ivp") : float(na)
+float fRv      = feedOk ? f_feed_num(feed, "rv") : float(na)
+float fVrp     = feedOk ? f_feed_num(feed, "vrp") : float(na)
+float fBasis   = feedOk ? f_feed_num(feed, "xb") : float(na)
+float fEm      = feedOk ? f_feed_num(feed, "em") : float(na)
+float fEam     = feedOk ? f_feed_num(feed, "eam") : float(na)
+float fBreadth = feedOk ? f_feed_num(feed, "brd") : float(na)
+float fCoverage= feedOk ? f_feed_num(feed, "cov") : float(na)
+float fAdv     = feedOk ? f_feed_num(feed, "adv") : float(na)
+float fDec     = feedOk ? f_feed_num(feed, "dec") : float(na)
+float fSig     = feedOk ? f_feed_num(feed, "sig") : float(na)
+float fRgc     = feedOk ? f_feed_num(feed, "rgc") : float(na)
+string fRegime = feedOk ? f_feed_field(feed, "regime") : na
+string fDirTxt = feedOk ? f_feed_field(feed, "dir") : na
+string fStrat  = feedOk ? f_feed_field(feed, "strat") : na
+string fAuth   = feedOk ? f_feed_field(feed, "auth") : na
+bool   authorized = fAuth == "1"
+
+// ================= drawing ============================================
+// Lines, labels and zones are rebuilt on the last bar rather than
+// accumulated, so the chart holds one set of current levels instead of a
+// trail of every level that was ever true.
+
+var array<line>  gLines  = array.new<line>()
+var array<label> gLabels = array.new<label>()
+var array<box>   gBoxes  = array.new<box>()
+
+f_reset() =>
+    while array.size(gLines) > 0
+        line.delete(array.pop(gLines))
+    while array.size(gLabels) > 0
+        label.delete(array.pop(gLabels))
+    while array.size(gBoxes) > 0
+        box.delete(array.pop(gBoxes))
+
+f_level(float price, color col, string txt, string style, int width) =>
+    if not na(price)
+        array.push(gLines, line.new(bar_index - 300, price, bar_index + 12, price, xloc=xloc.bar_index, color=col, style=style, width=width))
+        array.push(gLabels, label.new(bar_index + 12, price, txt + "  " + str.tostring(price, "#.##"), xloc=xloc.bar_index, style=label.style_label_left, color=color.new(col, 15), textcolor=color.white, size=size.tiny))
+
+f_zone(float anchor, float thickness, color col, string txt) =>
+    if not na(anchor) and not na(thickness) and thickness > 0
+        array.push(gBoxes, box.new(bar_index - 300, anchor + thickness, bar_index + 12, anchor - thickness, xloc=xloc.bar_index, border_color=color.new(col, 55), bgcolor=color.new(col, 88), text=txt, text_color=color.new(col, 15), text_size=size.tiny, text_halign=text.align_left, text_valign=text.align_top))
+
+f_band(float centre, float width, color col, string txt) =>
+    if not na(centre) and not na(width) and width > 0
+        array.push(gBoxes, box.new(bar_index - 60, centre + width, bar_index + 12, centre - width, xloc=xloc.bar_index, border_color=color.new(col, 40), border_style=line.style_dashed, bgcolor=color.new(col, 93), text=txt, text_color=color.new(col, 20), text_size=size.tiny, text_halign=text.align_right, text_valign=text.align_top))
+
+// The nearest level either side, over everything the brain reported plus
+// the session's own structure.
+f_nearer_above(float best, float candidate) =>
+    na(candidate) or candidate <= close ? best : na(best) ? candidate : math.min(best, candidate)
+f_nearer_below(float best, float candidate) =>
+    na(candidate) or candidate >= close ? best : na(best) ? candidate : math.max(best, candidate)
+
+float resistance = na
+float support = na
+resistance := f_nearer_above(resistance, dPivotHigh)
+resistance := f_nearer_above(resistance, dPivotHigh2)
+resistance := f_nearer_above(resistance, dPrevHigh)
+resistance := f_nearer_above(resistance, dPrevClose)
+resistance := f_nearer_above(resistance, orDone ? orHigh : na)
+support := f_nearer_below(support, dPivotLow)
+support := f_nearer_below(support, dPivotLow2)
+support := f_nearer_below(support, dPrevLow)
+support := f_nearer_below(support, dPrevClose)
+support := f_nearer_below(support, orDone ? orLow : na)
+
+// The engine's own invalidation, from IndexBrain._invalidations: a
+// bullish read is broken by sustained trade below the nearest support and
+// a bearish one by sustained trade above the nearest resistance. Drawn
+// because it is the level that would change the engine's mind, which is
+// worth more on a chart than another moving average.
+float invalidation = dDir == 1 ? support : dDir == -1 ? resistance : na
+
+// One-session expected move from realized volatility. Annualized vol over
+// 252 sessions, so one session is sigma/sqrt(252) — and the expected
+// ABSOLUTE move is 0.7979 sigma, not one sigma, which is the number an
+// ATM straddle actually prices.
+float dailySigma = na(dYzVol) ? float(na) : close * (dYzVol / 100.0) / math.sqrt(252.0)
+float dailyEabs  = na(dailySigma) ? float(na) : dailySigma * 0.7978845608
+
+if barstate.islast
+    f_reset()
+    if showLevels
+        f_level(support,      cBull,    "SUPPORT",    line.style_solid,  2)
+        f_level(resistance,   cBear,    "RESISTANCE", line.style_solid,  2)
+        f_level(dRangeHigh,   cDim,     "RANGE HI",   line.style_dotted, 1)
+        f_level(dRangeLow,    cDim,     "RANGE LO",   line.style_dotted, 1)
+        f_level(dPrevClose,   cNeutral, "PREV CLOSE", line.style_dashed, 1)
+        if not na(invalidation)
+            f_level(invalidation, cAccent, dDir == 1 ? "BULL INVALIDATED BELOW" : "BEAR INVALIDATED ABOVE", line.style_dashed, 2)
+        // Chain-derived, and only ever from a fresh feed.
+        f_level(fMaxPain,  #b39ddb, "MAX PAIN",  line.style_dashed, 1)
+        f_level(fCallWall, #ef9a9a, "CALL WALL", line.style_dashed, 1)
+        f_level(fPutWall,  #a5d6a7, "PUT WALL",  line.style_dashed, 1)
+    if showZones and not na(dAtr)
+        f_zone(resistance, dAtr * 0.18, cBear, "SUPPLY")
+        f_zone(support,    dAtr * 0.18, cBull, "DEMAND")
+    if showEm
+        // Two bands with different provenance, labelled as such. The
+        // engine's expected move comes from implied volatility over the
+        // option's own tenor; this chart's comes from realized volatility
+        // over one session. They answer different questions and a chart
+        // that merged them would be inventing a third.
+        f_band(close, dailyEabs, cNeutral, "E|move| 1d realized " + str.tostring(dailyEabs, "#.#"))
+        if not na(fEam)
+            f_band(close, fEam, cAccent, "E|move| implied (feed) " + str.tostring(fEam, "#.#"))
+
+// ================= plots ==============================================
+plot(showRibbon ? dEmaFast : na, "EMA fast (engine seeding)", color=color.new(#42a5f5, 0), linewidth=1)
+plot(showRibbon ? dEmaSlow : na, "EMA slow (engine seeding)", color=color.new(#ffa726, 0), linewidth=1)
+plot(showRibbon and intraday ? sessVwap : na, "Session VWAP", color=color.new(#ffee58, 0), linewidth=1)
+plot(intraday and orDone ? orHigh : na, "Opening range high", color=color.new(#ab47bc, 40), style=plot.style_stepline)
+plot(intraday and orDone ? orLow : na, "Opening range low", color=color.new(#ab47bc, 40), style=plot.style_stepline)
+
+bgcolor(tintBg and dDir == 1 ? color.new(cBull, 94) : tintBg and dDir == -1 ? color.new(cBear, 94) : na, title="Direction tint")
+barcolor(dDir == 1 ? color.new(cBull, 20) : dDir == -1 ? color.new(cBear, 20) : na, title="Direction candles")
+
+// Fire on the TRANSITION, never on the state: a marker that repeats every
+// bar while price sits beyond the range is not news after the first one.
+bool intoBreakout  = dBstate == 1 and dBstate[1] != 1
+bool intoBreakdown = dBstate == 2 and dBstate[1] != 2
+bool failedUp      = dBstate == 3 and dBstate[1] != 3
+bool failedDown    = dBstate == 4 and dBstate[1] != 4
+bool dirFlip       = dDir != dDir[1] and dDir != 0
+
+plotshape(showBreaks and intoBreakout,  "Breakout",  shape.labelup,   location.belowbar, color.new(cBull, 10), text="BREAK", textcolor=color.white, size=size.tiny)
+plotshape(showBreaks and intoBreakdown, "Breakdown", shape.labeldown, location.abovebar, color.new(cBear, 10), text="BREAK", textcolor=color.white, size=size.tiny)
+plotshape(showBreaks and failedUp,      "Failed breakout",  shape.xcross, location.abovebar, color.new(cAccent, 10), size=size.tiny)
+plotshape(showBreaks and failedDown,    "Failed breakdown", shape.xcross, location.belowbar, color.new(cAccent, 10), size=size.tiny)
+plotshape(showBreaks and dirFlip and dDir == 1,  "Flip bullish", shape.triangleup,   location.belowbar, color.new(cBull, 0), size=size.small)
+plotshape(showBreaks and dirFlip and dDir == -1, "Flip bearish", shape.triangledown, location.abovebar, color.new(cBear, 0), size=size.small)
+
+// ================= dashboard ==========================================
+// Two provenances, kept visually apart. Everything under INDEX BRAIN was
+// computed on this chart from OHLC and is exact; everything under ENGINE
+// FEED was measured elsewhere and pasted in, and carries its age. Mixing
+// them into one undifferentiated list of numbers is how a chart starts
+// implying it knows the option chain.
+
+f_dirName(int d) => d == 1 ? "BULLISH" : d == -1 ? "BEARISH" : "NEUTRAL"
+f_dirColor(int d) => d == 1 ? cBull : d == -1 ? cBear : cNeutral
+f_bstateName(int b) => b == 1 ? "BREAKOUT" : b == 2 ? "BREAKDOWN" : b == 3 ? "FAILED BREAKOUT" : b == 4 ? "FAILED BREAKDOWN" : "none"
+// The dash is not decoration: a value the system could not measure must
+// never render as a number, and zero is a number.
+f_num(float v, string fmt) => na(v) ? "—" : str.tostring(v, fmt)
+f_pct(float v) => na(v) ? "—" : str.tostring(v * 100, "#") + "%"
+
+f_head(table t, int r, string left, string right, color col) =>
+    table.cell(t, 0, r, left,  bgcolor=color.new(col, 55), text_color=color.white, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(t, 1, r, right, bgcolor=color.new(col, 55), text_color=color.white, text_size=size.tiny, text_halign=text.align_right)
+
+f_row(table t, int r, string k, string v, color vc) =>
+    table.cell(t, 0, r, k, bgcolor=color.new(cPanel, 15), text_color=cInk,  text_size=size.tiny, text_halign=text.align_left)
+    table.cell(t, 1, r, v, bgcolor=color.new(cPanel, 15), text_color=vc,    text_size=size.tiny, text_halign=text.align_right)
+
+var table panel = table.new(panelPos == "Top right" ? position.top_right : panelPos == "Middle right" ? position.middle_right : panelPos == "Bottom right" ? position.bottom_right : position.bottom_left, 2, 28, border_width=1, frame_color=color.new(cDim, 40), frame_width=1)
+
+if barstate.islast and showPanel
+    f_head(panel, 0, "INDEX BRAIN  §5  (computed here)", f_dirName(dDir), f_dirColor(dDir))
+    f_row(panel, 1,  "composite",                 f_num(dComposite, "#.###"), f_dirColor(dDir))
+    f_row(panel, 2,  "confidence",                f_num(dConf, "#.##"),       dConf > 0.5 ? cBull : cNeutral)
+    f_row(panel, 3,  "trend / structure / momentum", f_num(dTrend, "#.##") + " / " + f_num(dStruct, "#.##") + " / " + f_num(dMom, "#.##"), cInk)
+    f_row(panel, 4,  "ATR(" + str.tostring(atrPeriod) + ") / percentile", f_num(dAtr, "#.##") + "  " + f_pct(dVolRank), cInk)
+    f_row(panel, 5,  "breakout state",            f_bstateName(dBstate), dBstate == 1 ? cBull : dBstate == 2 ? cBear : dBstate > 2 ? cAccent : cNeutral)
+    f_row(panel, 6,  "RSI(" + str.tostring(rsiPeriod) + ") Cutler", f_num(dRsi, "#.#"), cInk)
+    f_row(panel, 7,  "realized " + str.tostring(rvWindow) + "d  YZ / CC", f_num(dYzVol, "#.##") + "% / " + f_num(dCcVol, "#.##") + "%", cInk)
+    f_row(panel, 8,  "VWAP distance (ATR)",       intraday ? f_num(vwapDistAtr, "#.##") : "daily chart", cInk)
+    f_row(panel, 9,  "gap",                       f_num(dGapPct, "+#.##") + "%", na(dGapPct) ? cNeutral : dGapPct > 0 ? cBull : cBear)
+    f_row(panel, 10, "support / resistance",      f_num(support, "#.##") + " / " + f_num(resistance, "#.##"), cInk)
+    f_row(panel, 11, "E|move| 1 session (realized)", f_num(dailyEabs, "#.#") + " pts", cInk)
+
+    f_head(panel, 12, feedOk ? "ENGINE FEED  (measured elsewhere)" : "ENGINE FEED — NOT VISIBLE HERE", feedStatus, feedColor)
+    f_row(panel, 13, "regime",              na(fRegime) ? "—" : fRegime + "  " + f_num(fRgc, "#.##"), cInk)
+    f_row(panel, 14, "signal",              na(fDirTxt) ? "—" : fDirTxt + "  " + f_num(fSig, "#.##"), na(fDirTxt) ? cNeutral : fDirTxt == "BULLISH" ? cBull : fDirTxt == "BEARISH" ? cBear : cNeutral)
+    f_row(panel, 15, "breadth  adv / dec",  na(fAdv) ? "—" : str.tostring(fAdv, "#") + " / " + str.tostring(fDec, "#") + "   " + f_num(fBreadth, "#.##"), na(fBreadth) ? cNeutral : fBreadth > 0 ? cBull : cBear)
+    f_row(panel, 16, "weight coverage",     f_pct(fCoverage), na(fCoverage) ? cNeutral : fCoverage < 0.5 ? cAccent : cBull)
+    f_row(panel, 17, "max pain",            f_num(fMaxPain, "#.##"), cInk)
+    f_row(panel, 18, "call wall / put wall",f_num(fCallWall, "#.##") + " / " + f_num(fPutWall, "#.##"), cInk)
+    f_row(panel, 19, "PCR (OI)",            f_num(fPcr, "#.##"), cInk)
+    f_row(panel, 20, "ATM IV / percentile", f_num(fIv, "#.##") + "%  " + f_pct(fIvp), cInk)
+    f_row(panel, 21, "realized (engine)",   f_num(fRv, "#.##") + "%", cInk)
+    // Sign is the whole reading for an option BUYER: negative means the
+    // market has been moving more than options are pricing.
+    f_row(panel, 22, "VRP  implied − realized", na(fVrp) ? "—" : str.tostring(fVrp, "+#.##") + "  " + (fVrp > 0 ? "rich" : "cheap"), na(fVrp) ? cNeutral : fVrp > 0 ? cBear : cBull)
+    f_row(panel, 23, "excess basis",        f_num(fBasis, "+#.##"), cInk)
+    f_row(panel, 24, "E|move| implied",     na(fEam) ? "—" : str.tostring(fEam, "#.#") + " pts", cInk)
+    f_row(panel, 25, "strategy",            na(fStrat) ? "—" : fStrat, cInk)
+
+    // No entry, no stop, no targets — not because they are hard to draw,
+    // but because a chart cannot run the Execution Gate, price a spread
+    // against a live book, or size against an account. Levels appear here
+    // only when the feed says the engine authorized something.
+    f_head(panel, 26, "AUTHORIZATION", authorized ? "AUTHORIZED" : "NOT AUTHORIZED", authorized ? cBull : cBear)
+    f_row(panel, 27, "decision", authorized ? "see the console for legs and size" : feedOk ? "engine authorized nothing this cycle" : "engine only — nothing here trades", authorized ? cBull : cNeutral)
+
+// ================= webhook payloads ===================================
+// alert() does not substitute {{placeholders}}, so every field is built
+// here. bar_time is the bar the alert fired on and fired_at is the firing
+// instant; the receiver dedupes on the former and expires on the latter,
+// so both are sent.
+f_iso(int t) => str.format_time(t, "yyyy-MM-dd'T'HH:mm:ss'Z'", "UTC")
+
+f_payload(string kind, float level, string note) =>
+    '{"secret":"' + tvSecret +
+      '","kind":"' + kind +
+      '","ticker":"' + syminfo.ticker +
+      '","interval":"' + timeframe.period +
+      '","price":"' + str.tostring(close, "#.##") +
+      '","bar_time":"' + f_iso(time) +
+      '","fired_at":"' + f_iso(timenow) +
+      '","level":' + (na(level) ? 'null' : '"' + str.tostring(level, "#.##") + '"') +
+      ',"note":"' + note + '"}'
+
+bool canFire = alertsOn and str.length(tvSecret) >= 16
+
+bool srTest    = (not na(resistance) and not na(dAtr) and math.abs(close - resistance) < dAtr * 0.1 and math.abs(close[1] - resistance) >= dAtr * 0.1) or (not na(support) and not na(dAtr) and math.abs(close - support) < dAtr * 0.1 and math.abs(close[1] - support) >= dAtr * 0.1)
+bool vwapCross = intraday and not na(sessVwap) and (ta.crossover(close, sessVwap) or ta.crossunder(close, sessVwap))
+bool volShift  = not na(dVolRank) and ((dVolRank >= 0.8 and nz(dVolRank[1], 0) < 0.8) or (dVolRank <= 0.2 and nz(dVolRank[1], 1) > 0.2))
+bool orBreak   = intraday and orDone and not na(orHigh) and not na(orLow) and (ta.crossover(close, orHigh) or ta.crossunder(close, orLow))
+
+if canFire and fireBreak and intoBreakout
+    alert(f_payload("BREAKOUT", dRangeHigh, "close cleared the " + str.tostring(breakoutLb) + "-bar range plus " + str.tostring(breakoutBuf) + " ATR"), alert.freq_once_per_bar_close)
+if canFire and fireBreak and intoBreakdown
+    alert(f_payload("BREAKDOWN", dRangeLow, "close broke the " + str.tostring(breakoutLb) + "-bar range minus " + str.tostring(breakoutBuf) + " ATR"), alert.freq_once_per_bar_close)
+if canFire and fireSr and srTest
+    alert(f_payload("SUPPORT_RESISTANCE_TEST", close > nz(support, close) and not na(resistance) and math.abs(close - resistance) < math.abs(close - nz(support, close)) ? resistance : support, "price reached a swing level within 0.1 ATR"), alert.freq_once_per_bar_close)
+if canFire and fireVwap and vwapCross
+    alert(f_payload("VWAP_CROSSING", sessVwap, close > sessVwap ? "reclaimed session VWAP" : "lost session VWAP"), alert.freq_once_per_bar_close)
+if canFire and fireVol and volShift
+    alert(f_payload("VOLATILITY_EXPANSION_CONTRACTION", dAtr, "ATR percentile " + str.tostring(dVolRank * 100, "#") + " of its own history"), alert.freq_once_per_bar_close)
+if canFire and fireOr and orBreak
+    alert(f_payload("OPENING_RANGE_EVENT", close > orHigh ? orHigh : orLow, "opening range broken " + (close > orHigh ? "up" : "down")), alert.freq_once_per_bar_close)
+// A composite flip is the highest-value event on this chart and has no
+// trigger type of its own, because the enum's chart-observable family is
+// about price events rather than about this system's own scores. It is
+// sent as SIGNIFICANT_PRICE_MOVEMENT with the composite in the note: the
+// engine re-derives the score from its own data on waking, so the label
+// only decides whether the pipeline is worth waking, not what it finds.
+if canFire and fireFlip and dirFlip
+    alert(f_payload("SIGNIFICANT_PRICE_MOVEMENT", close, "index-brain composite " + str.tostring(dComposite, "#.###") + " -> " + f_dirName(dDir) + " (confidence " + str.tostring(dConf, "#.##") + ")"), alert.freq_once_per_bar_close)

@@ -1,0 +1,13 @@
+[Unit]
+Description=Pull and deploy the latest Index Brain, rolling back on failure
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/index-option-brain
+EnvironmentFile=-/opt/index-option-brain/.env
+ExecStart=/opt/index-option-brain/deploy/self-update.sh
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=index-brain-update

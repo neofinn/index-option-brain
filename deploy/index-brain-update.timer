@@ -1,0 +1,12 @@
+[Unit]
+Description=Check for Index Brain updates
+
+[Timer]
+# Every ten minutes, jittered so a fleet does not stampede the git host and
+# so a bad push is not picked up by everything at the same instant.
+OnBootSec=3min
+OnUnitActiveSec=10min
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target

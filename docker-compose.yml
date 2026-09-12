@@ -1,0 +1,42 @@
+# The engine and console.
+#
+#   docker compose up -d
+#
+# Bound to loopback, never to 0.0.0.0. Exposure is Tailscale's job — either
+# `tailscale serve` on the host (what deploy/cloud-init.yaml sets up, and the
+# recommended path) or the sidecar in docker-compose.tailscale.yml. Neither
+# puts a port on a public interface, which matters because this process holds
+# broker credentials once one is connected.
+
+services:
+  brain:
+    build: .
+    image: index-option-brain:local
+    container_name: index-brain
+    restart: unless-stopped
+    ports:
+      # Loopback only. `tailscale serve` proxies to this.
+      - "127.0.0.1:8000:8000"
+    env_file:
+      - .env
+    environment:
+      LLM_ENABLED: ${LLM_ENABLED:-false}
+      RUN_MODE: ${RUN_MODE:-paper}
+      BAR_STORE_DIR: /app/var/bars
+    # Read-only root with a tmpfs for scratch: nothing in this image needs to
+    # write outside the bar store, and a process holding credentials should
+    # not be able to.
+    read_only: true
+    tmpfs:
+      - /tmp
+    volumes:
+      # Observed bars, so a restart does not go blind for a session. NSE
+      # serves no history, so this history is uptime.
+      - ./var:/app/var
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"

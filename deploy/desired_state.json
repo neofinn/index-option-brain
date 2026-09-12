@@ -1,0 +1,10 @@
+{
+  "revision": "2026-09-04-initial",
+  "note": "Observation only. Trading cannot be enabled from this file by design - see index_option_brain/deploy/reconcile.py.",
+  "settings": {
+    "branch": "scaffold/architecture-contracts",
+    "capture_enabled": true,
+    "capture_chain_seconds": 300,
+    "log_level": "INFO"
+  }
+}

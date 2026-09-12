@@ -1,0 +1,13 @@
+[Unit]
+Description=Run the Index Brain deploy agent
+
+[Timer]
+# Five minutes, jittered. Fast enough that a pushed change lands while
+# someone is still watching for it; slow enough that the status branch does
+# not become a commit firehose.
+OnBootSec=2min
+OnUnitActiveSec=5min
+RandomizedDelaySec=60
+
+[Install]
+WantedBy=timers.target

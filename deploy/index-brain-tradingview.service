@@ -1,0 +1,66 @@
+# systemd unit for the TradingView webhook receiver.
+#
+#   sudo cp deploy/index-brain-tradingview.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now index-brain-tradingview
+#
+# A SEPARATE unit from index-option-brain.service, for two reasons that pull
+# in the same direction:
+#
+#   * The console API is provably read-only — every route is GET, HEAD or
+#     OPTIONS, and there is a test asserting it. That is the boundary the
+#     assistant sits behind. A webhook is a POST, and putting one on that
+#     app would delete the proof for every route at once.
+#   * The console is served on the tailnet so that it is not on the public
+#     internet. A TradingView webhook has to be: TradingView's servers place
+#     the call. Opposite exposure requirements, so opposite processes.
+#
+# This one therefore binds 0.0.0.0 while the console binds loopback. It holds
+# no broker credentials and cannot reach an order path.
+
+[Unit]
+Description=Index Option Brain — TradingView webhook receiver
+Documentation=https://github.com/neofinn/index-option-brain
+After=network-online.target
+Wants=network-online.target
+# Not Requires=: the receiver's job is to accept and record alerts, and it
+# can still do that while the engine is restarting. Coupling them would mean
+# an engine restart drops every alert that fires during it.
+After=index-option-brain.service
+
+[Service]
+Type=exec
+User=brain
+Group=brain
+WorkingDirectory=/opt/index-option-brain
+EnvironmentFile=/opt/index-option-brain/.env
+
+# Refuses to start without TRADINGVIEW_WEBHOOK_SECRET, so a misconfigured
+# unit fails loudly instead of opening an unauthenticated endpoint.
+ExecStart=/opt/index-option-brain/.venv/bin/python -m index_option_brain.integrations.tradingview
+
+Restart=always
+RestartSec=10s
+
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+# The database only. It has no bar store to write and no credentials to read.
+ReadWritePaths=/opt/index-option-brain/var
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=index-brain-tv
+
+[Install]
+WantedBy=multi-user.target
